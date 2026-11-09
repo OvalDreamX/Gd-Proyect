@@ -1,6 +1,7 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="Script" path="res://scripts/ship_interactable.gd" id="1_ship"]
+[ext_resource type="Script" path="res://scripts/ship_flight_controller.gd" id="2_flight_controller"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_hull"]
 size = Vector3(3.6, 1.5, 5.2)
@@ -98,3 +99,6 @@ material_override = SubResource("Material_hull")
 position = Vector3(0, 0.78, -2.48)
 mesh = SubResource("BoxMesh_top_frame")
 material_override = SubResource("Material_hull")
+
+[node name="FlightController" type="Node" parent="."]
+script = ExtResource("2_flight_controller")

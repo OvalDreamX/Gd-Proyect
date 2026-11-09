@@ -1,48 +1,46 @@
-# Space Trucker — Phase 1 Prototype
+# Space Trucker — Phase 2A Prototype
 
-**Target engine:** Godot 4.7.2 stable (GDScript, standard edition; no .NET required)
+**Target engine:** Godot 4.7.2 Stable (GDScript, standard edition; no .NET required)
 
-This is the first playable interaction slice. It deliberately does **not** include flight physics, ship systems, walking inside the ship, or a way to leave the cockpit yet.
+Phase 2A adds ship-owned repulsorlift activation-state handling, initial ship command collection, and a telemetry HUD. It builds on the original first-person walk-up/cockpit-entry slice.
 
-## What is implemented
+## Implemented
 
-- A first-person player spawns on a simple test range beside a blocky freighter.
-- WASD movement, mouse look, Space to jump, and Escape to release the mouse.
-- A spherical proximity area detects the player near the ship.
-- A `PILOT SHIP [F]` prompt appears while in range.
-- Pressing F starts a short tweened transition: the view dims, the placeholder hull is hidden, the cockpit interior is revealed, and the first-person camera dollies toward the cockpit.
-- A brief final fade masks the player-body teleport to the seat anchor and the handoff to the cockpit camera. Player movement and collision are disabled afterward.
-- The cockpit view contains a very simple dashboard and window-frame placeholder.
-
-## Run it
-
-1. Extract the ZIP file.
-2. Open Godot 4.7.2 stable.
-3. In the Project Manager, choose **Import**.
-4. Select the `project.godot` file inside this folder.
-5. Open the project and press **F6** only if you want to run the current scene; otherwise press **F6** is unnecessary — press **F6** to run the project main scene? Use **F6** for current scene and **F5** for project. The intended shortcut is **F6**? See note below.
-
-**Run:** press **F6** to run the current scene only when `test_range.tscn` is open, or **F5** to run the project's configured main scene.
+- Existing first-person walking and cockpit-entry transition are preserved.
+- A `ShipFlightController` node is attached to the ship's existing `RigidBody3D` root.
+- Pressing F in the cockpit changes the field state through `OFF -> STARTING -> ONLINE`; pressing F again aborts startup or switches the field OFF.
+- W/S changes the field-power command while ONLINE.
+- Q/E continuously changes the vector-distribution command between 0 and 110 degrees.
+- A/D produces a normalized yaw command for telemetry.
+- A neutral-input interlock prevents keys held during field startup from becoming unintended commands when the field comes ONLINE.
+- A separate `FlightHUD` displays the command values and clearly reports that force output is not connected.
+- The HUD is visible only after the cockpit-entry transition is complete.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| W / A / S / D | Walk |
-| Mouse | Look around |
+| W / A / S / D | Walk outside the ship; field power / yaw telemetry while seated and ONLINE |
+| Mouse | Look around outside the ship |
 | Space | Jump |
-| F | Pilot ship when prompt is visible |
-| Escape | Release mouse capture; click to capture again |
+| F near the ship | Enter cockpit |
+| F while seated | Start/abort/stop the repulsorlift field |
+| W / S while field ONLINE | Increase/decrease field-power command |
+| Q / E while field ONLINE | Move vector distribution continuously from 0 to 110 degrees |
+| A / D while field ONLINE | Yaw command telemetry (-1 to +1) |
+| Escape | Release mouse capture while walking |
 
-## Current limitations (intentional)
+## Explicit scope boundary
 
-- Once seated, the cockpit camera is active but the ship cannot move yet.
-- There is no exit/disembark input in this slice; restart the scene to test again.
-- The ship is frozen in place. Its root is already a `RigidBody3D` so the later flight model can build on it.
-- The hull disappears during the cockpit handoff because this first placeholder hull is a solid box, not a modeled walkable interior.
-- The player capsule is hidden by design; this is a first-person prototype.
+**The ship does not fly in Phase 2A.** The rigid body remains frozen, and the new controller does not call force, impulse or torque APIs or modify the ship's transform/velocity. Field power starts at zero. W/S, Q/E and A/D currently produce command values only.
 
-## Scene and script structure
+Mouse pitch/roll input, external camera, RMB camera-look mode and F3 debug overview are reserved for Phase 2B. Vane definitions, force/torque calculations, FCC and actual rigid-body integration remain later milestones. The GDD's Step 1 rigid-body validation must be completed before collective lift is connected to physics.
+
+## Run
+
+Open the project in Godot 4.7.2 Stable and press F5 to run the configured main scene. Walk to the freighter, enter the cockpit using the existing prompt, and test the seated controls above.
+
+## Project structure
 
 ```text
 res://
@@ -54,21 +52,10 @@ res://
   scripts/
     player_controller.gd
     ship_interactable.gd
+    ship_flight_controller.gd
+    flight_hud.gd
 ```
 
-### Responsibilities
+## Next validation
 
-- `player_controller.gd`: first-person movement, look, prompt UI, interaction, and cockpit-entry transition.
-- `ship_interactable.gd`: proximity detection and request routing to the pilot seat.
-- `ship.tscn`: placeholder rigid-body freighter, proximity area, seat anchor, cockpit camera and basic cockpit geometry.
-- `test_range.tscn`: ground, landing pad, lighting, player spawn and ship instance.
-
-## Next intended milestone
-
-After this interaction slice is confirmed working on the user's machine, add a clean way to leave the cockpit / return to walking mode, then begin the actual ship flight prototype. Do not add the flight model to this project phase without an explicit request.
-
-## Troubleshooting
-
-- If the mouse is visible, click the game window to capture it.
-- If the prompt does not appear, walk toward the freighter until inside its interaction radius.
-- If Godot reports parse errors, record the exact version and copy the first error with its file and line number; fix the first parse error before chasing later errors.
+Follow `INSTALL_PHASE_2A.md` for the acceptance-test sequence. The immediate next implementation should be chosen after Phase 2A has been run on the target Godot 4.7.2 installation and its results have been reviewed.
