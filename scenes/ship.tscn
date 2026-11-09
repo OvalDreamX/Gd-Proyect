@@ -1,0 +1,100 @@
+[gd_scene load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://scripts/ship_interactable.gd" id="1_ship"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_hull"]
+size = Vector3(3.6, 1.5, 5.2)
+
+[sub_resource type="SphereShape3D" id="SphereShape_pilot_zone"]
+radius = 4.7
+
+[sub_resource type="BoxMesh" id="BoxMesh_hull"]
+size = Vector3(3.6, 1.5, 5.2)
+
+[sub_resource type="StandardMaterial3D" id="Material_hull"]
+albedo_color = Color(0.245, 0.31, 0.37, 1)
+roughness = 0.82
+metallic = 0.18
+
+[sub_resource type="BoxMesh" id="BoxMesh_nose_panel"]
+size = Vector3(2.0, 0.58, 0.08)
+
+[sub_resource type="StandardMaterial3D" id="Material_nose_panel"]
+albedo_color = Color(0.055, 0.16, 0.2, 1)
+roughness = 0.28
+metallic = 0.25
+
+[sub_resource type="BoxMesh" id="BoxMesh_dashboard"]
+size = Vector3(2.8, 0.48, 0.62)
+
+[sub_resource type="StandardMaterial3D" id="Material_dashboard"]
+albedo_color = Color(0.075, 0.09, 0.105, 1)
+roughness = 0.92
+
+[sub_resource type="BoxMesh" id="BoxMesh_frame"]
+size = Vector3(0.13, 1.25, 0.13)
+
+[sub_resource type="BoxMesh" id="BoxMesh_top_frame"]
+size = Vector3(3.1, 0.13, 0.13)
+
+[node name="PrototypeFreighter" type="RigidBody3D"]
+position = Vector3(0, 0.78, 0)
+script = ExtResource("1_ship")
+freeze = true
+mass = 12000.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_hull")
+
+[node name="PilotZone" type="Area3D" parent="."]
+collision_layer = 0
+collision_mask = 1
+monitoring = true
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PilotZone"]
+shape = SubResource("SphereShape_pilot_zone")
+
+[node name="CockpitSeat" type="Marker3D" parent="."]
+position = Vector3(0, 0.0, -0.9)
+
+[node name="CockpitCamera" type="Camera3D" parent="CockpitSeat"]
+position = Vector3(0, 0.12, -0.55)
+fov = 78.0
+near = 0.05
+current = false
+
+[node name="Visuals" type="Node3D" parent="."]
+
+[node name="Hull" type="Node3D" parent="Visuals"]
+
+[node name="HullMesh" type="MeshInstance3D" parent="Visuals/Hull"]
+mesh = SubResource("BoxMesh_hull")
+material_override = SubResource("Material_hull")
+
+[node name="NosePanel" type="MeshInstance3D" parent="Visuals/Hull"]
+position = Vector3(0, 0.0, -2.64)
+mesh = SubResource("BoxMesh_nose_panel")
+material_override = SubResource("Material_nose_panel")
+
+[node name="CockpitInterior" type="Node3D" parent="Visuals"]
+visible = false
+
+[node name="Dashboard" type="MeshInstance3D" parent="Visuals/CockpitInterior"]
+position = Vector3(0, -0.28, -1.73)
+mesh = SubResource("BoxMesh_dashboard")
+material_override = SubResource("Material_dashboard")
+
+[node name="LeftWindowPost" type="MeshInstance3D" parent="Visuals/CockpitInterior"]
+position = Vector3(-1.48, 0.18, -2.48)
+mesh = SubResource("BoxMesh_frame")
+material_override = SubResource("Material_hull")
+
+[node name="RightWindowPost" type="MeshInstance3D" parent="Visuals/CockpitInterior"]
+position = Vector3(1.48, 0.18, -2.48)
+mesh = SubResource("BoxMesh_frame")
+material_override = SubResource("Material_hull")
+
+[node name="TopWindowFrame" type="MeshInstance3D" parent="Visuals/CockpitInterior"]
+position = Vector3(0, 0.78, -2.48)
+mesh = SubResource("BoxMesh_top_frame")
+material_override = SubResource("Material_hull")
