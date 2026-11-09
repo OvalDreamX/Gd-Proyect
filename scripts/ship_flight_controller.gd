@@ -23,6 +23,12 @@ enum FieldState {
 ## Prototype tuning value: rate of travel through the continuous 0-110 degree range.
 @export_range(5.0, 90.0, 1.0) var vector_change_degrees_per_second: float = 35.0
 
+## Maximum rate at which generated field output catches up with the power setpoint.
+## Kept below the pilot command rate to create a visible, tunable spool response.
+@export_range(0.05, 1.0, 0.05) var field_power_output_rate_per_second: float = 0.20
+## Maximum rate at which actual field-vector distribution follows its setpoint.
+@export_range(5.0, 90.0, 1.0) var vector_output_change_degrees_per_second: float = 22.0
+
 const MIN_VECTOR_DISTRIBUTION_DEGREES: float = 0.0
 const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
 
@@ -31,8 +37,12 @@ const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
 var _startup_time_remaining: float = 0.0
+# Pilot setpoints move in response to W/S and Q/E. Actual outputs lag behind
+# these setpoints, representing generator spool-up and field-vector actuator response.
 var _field_power_command: float = 0.0
+var _field_power_output: float = 0.0
 var _vector_distribution_degrees: float = MIN_VECTOR_DISTRIBUTION_DEGREES
+var _vector_distribution_actual_degrees: float = MIN_VECTOR_DISTRIBUTION_DEGREES
 var _yaw_command: float = 0.0
 var _require_neutral_controls: bool = false
 
@@ -87,6 +97,7 @@ func _physics_process(delta: float) -> void:
 
 	if _field_state == FieldState.ONLINE:
 		telemetry_changed = _update_online_commands(delta) or telemetry_changed
+		telemetry_changed = _update_actuator_outputs(delta) or telemetry_changed
 	elif not is_zero_approx(_yaw_command):
 		_yaw_command = 0.0
 		telemetry_changed = true
@@ -107,6 +118,7 @@ func _toggle_field_state() -> void:
 func _turn_field_off() -> void:
 	_startup_time_remaining = 0.0
 	_field_power_command = 0.0
+	_field_power_output = 0.0
 	_yaw_command = 0.0
 	_set_field_state(FieldState.OFF)
 
@@ -177,6 +189,33 @@ func _update_online_commands(delta: float) -> bool:
 	return changed
 
 
+func _update_actuator_outputs(delta: float) -> bool:
+	# Use a rate-limited response rather than directly copying the setpoints.
+	# This is intentionally a simple, deterministic spool/actuator model; it is
+	# not yet a thermal or electrical simulation of the fictional generator.
+	var changed: bool = false
+
+	var new_power_output: float = move_toward(
+		_field_power_output,
+		_field_power_command,
+		field_power_output_rate_per_second * delta
+	)
+	if not is_equal_approx(new_power_output, _field_power_output):
+		_field_power_output = new_power_output
+		changed = true
+
+	var new_vector_output: float = move_toward(
+		_vector_distribution_actual_degrees,
+		_vector_distribution_degrees,
+		vector_output_change_degrees_per_second * delta
+	)
+	if not is_equal_approx(new_vector_output, _vector_distribution_actual_degrees):
+		_vector_distribution_actual_degrees = new_vector_output
+		changed = true
+
+	return changed
+
+
 func _publish_telemetry() -> void:
 	if not is_instance_valid(_hud):
 		return
@@ -186,7 +225,9 @@ func _publish_telemetry() -> void:
 	var snapshot: Dictionary = {
 		"field_state": _field_state_name(),
 		"field_power_command": _field_power_command,
+		"field_power_output": _field_power_output,
 		"vector_distribution_degrees": _vector_distribution_degrees,
+		"vector_distribution_actual_degrees": _vector_distribution_actual_degrees,
 		"yaw_command": _yaw_command,
 		"ship_mass_kg": _ship.mass,
 		"rigid_body_frozen": _ship.freeze,

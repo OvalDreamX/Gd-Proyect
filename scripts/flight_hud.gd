@@ -13,7 +13,9 @@ const COLOR_ONLINE: Color = Color(0.43, 0.90, 0.64, 1.0)
 
 var _field_state_label: Label
 var _field_power_label: Label
+var _field_power_output_label: Label
 var _vector_label: Label
+var _vector_output_label: Label
 var _yaw_label: Label
 var _mass_label: Label
 var _physics_label: Label
@@ -32,8 +34,10 @@ func update_telemetry(telemetry: Dictionary) -> void:
 		return
 
 	var field_state: String = str(telemetry.get("field_state", "OFF"))
-	var power: float = float(telemetry.get("field_power_command", 0.0))
-	var vector_degrees: float = float(telemetry.get("vector_distribution_degrees", 0.0))
+	var power_command: float = float(telemetry.get("field_power_command", 0.0))
+	var power_output: float = float(telemetry.get("field_power_output", 0.0))
+	var vector_command_degrees: float = float(telemetry.get("vector_distribution_degrees", 0.0))
+	var vector_actual_degrees: float = float(telemetry.get("vector_distribution_actual_degrees", 0.0))
 	var yaw: float = float(telemetry.get("yaw_command", 0.0))
 	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
 	var body_frozen: bool = bool(telemetry.get("rigid_body_frozen", true))
@@ -58,8 +62,10 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			_field_state_label.add_theme_color_override("font_color", COLOR_MUTED)
 			_instruction_label.text = "FIELD STATE UNKNOWN"
 
-	_field_power_label.text = "FIELD POWER      " + String.num(power * 100.0, 1) + "%"
-	_vector_label.text = "VECTOR DISTRIBUTION   " + String.num(vector_degrees, 1) + "°"
+	_field_power_label.text = "POWER SETPOINT       " + String.num(power_command * 100.0, 1) + "%"
+	_field_power_output_label.text = "POWER OUTPUT         " + String.num(power_output * 100.0, 1) + "%"
+	_vector_label.text = "VECTOR SETPOINT      " + String.num(vector_command_degrees, 1) + "°"
+	_vector_output_label.text = "VECTOR ACTUAL        " + String.num(vector_actual_degrees, 1) + "°"
 	_yaw_label.text = "YAW COMMAND      %s" % String.num(yaw, 2)
 	_mass_label.text = "SHIP MASS         %s kg" % String.num(mass_kg, 0)
 
@@ -84,8 +90,10 @@ func _build_hud() -> void:
 	var system_content := _create_panel_content(system_panel)
 	_add_label(system_content, "REPULSORLIFT CONTROL", 16, COLOR_ACCENT)
 	_field_state_label = _add_label(system_content, "FIELD STATE       OFF", 15, COLOR_MUTED)
-	_field_power_label = _add_label(system_content, "FIELD POWER       0.0 %", 14, COLOR_TEXT)
-	_vector_label = _add_label(system_content, "VECTOR DISTRIBUTION   0.0°", 14, COLOR_TEXT)
+	_field_power_label = _add_label(system_content, "POWER SETPOINT       0.0%", 14, COLOR_TEXT)
+	_field_power_output_label = _add_label(system_content, "POWER OUTPUT         0.0%", 14, COLOR_TEXT)
+	_vector_label = _add_label(system_content, "VECTOR SETPOINT      0.0°", 14, COLOR_TEXT)
+	_vector_output_label = _add_label(system_content, "VECTOR ACTUAL        0.0°", 14, COLOR_TEXT)
 	_add_label(system_content, "0° MAIN  |  90° LIFT  |  110° COMBINED BRAKE", 11, COLOR_MUTED)
 	_yaw_label = _add_label(system_content, "YAW COMMAND      +0.00", 14, COLOR_TEXT)
 
