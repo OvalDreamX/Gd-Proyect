@@ -6,8 +6,8 @@
 config_version=5
 
 [application]
-config/name="Space Trucker - Phase 2A Prototype"
-config/description="Cockpit interaction plus repulsorlift activation-state and telemetry HUD prototype."
+config/name="Space Trucker - Phase 2B Prototype"
+config/description="Cockpit interaction, repulsorlift activation/HUD, and independent camera/input modes."
 run/main_scene="res://scenes/test_range.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
@@ -81,7 +81,12 @@ ship_yaw_left={
 }
 ship_yaw_right={
 "deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":68,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":68,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+ship_camera_toggle={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":67,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 
