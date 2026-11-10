@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="VaneDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/vane_definition.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+vane_id = &"bottom_rear_right"
+display_name = "Bottom Rear Right"
+group_id = &"bottom_rear"
+local_position = Vector3(1.2, -0.65, 1.8)
+nominal_authority_twr = 0.275

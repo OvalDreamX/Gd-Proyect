@@ -27,6 +27,8 @@ var _com_mode_label: Label
 var _lift_force_label: Label
 var _lift_twr_label: Label
 var _hover_power_label: Label
+var _vane_status_label: Label
+var _predicted_torque_label: Label
 var _instruction_label: Label
 var _debug_overview_panel: PanelContainer
 var _debug_overview_label: Label
@@ -70,6 +72,12 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var hover_power_percent: float = float(telemetry.get("lift_hover_power_percent", -1.0))
 	var gravity_magnitude: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
 	var field_online: bool = bool(telemetry.get("lift_field_online", false))
+	var predicted_torque: Vector3 = telemetry.get("lift_predicted_torque_vector", Vector3.ZERO)
+	var vane_count: int = int(telemetry.get("vane_count", 0))
+	var vane_healthy_count: int = int(telemetry.get("vane_healthy_count", 0))
+	var vane_configuration_valid: bool = bool(telemetry.get("vane_configuration_valid", false))
+	var vane_states: Array = telemetry.get("vane_states", [])
+	var vane_contributions: Array = telemetry.get("lift_vane_contributions", [])
 
 	_field_state_label.text = "FIELD STATE       %s" % field_state
 	match field_state:
@@ -82,7 +90,7 @@ func update_telemetry(telemetry: Dictionary) -> void:
 		"ONLINE":
 			_field_state_label.add_theme_color_override("font_color", COLOR_ONLINE)
 			if bool(telemetry.get("controls_armed", true)):
-				_instruction_label.text = "FIELD ONLINE  |  COLLECTIVE LIFT TEST IS FIXED VERTICAL"
+				_instruction_label.text = "FIELD ONLINE  |  FRONT/REAR VANE RESULTANTS CALCULATED"
 			else:
 				_instruction_label.text = "RELEASE W/S, Q/E AND A/D TO ARM THE COMMAND INPUTS"
 		_:
@@ -103,6 +111,11 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_com_mode_label.text = "CENTER OF MASS    %s" % com_mode
 	_lift_force_label.text = "COLLECTIVE FORCE  %s N" % String.num(lift_force_n, 0)
 	_lift_twr_label.text = "LIFT TWR          %.2f / %.2f" % [actual_lift_twr, maximum_lift_twr]
+	_vane_status_label.text = "VANE ARRAY        %d REGISTERED / %d HEALTHY" % [vane_count, vane_healthy_count]
+	_vane_status_label.add_theme_color_override(
+		"font_color", COLOR_ONLINE if vane_configuration_valid else COLOR_WARNING
+	)
+	_predicted_torque_label.text = "PREDICTED TORQUE  %.1f N·m (NOT APPLIED)" % predicted_torque.length()
 	if hover_power_percent >= 0.0 and hover_power_percent <= 100.0:
 		_hover_power_label.text = "HOVER THRESHOLD   %.1f%% OUTPUT" % hover_power_percent
 	else:
@@ -118,7 +131,7 @@ func update_telemetry(telemetry: Dictionary) -> void:
 
 	_debug_overview_panel.visible = debug_enabled
 	if debug_enabled:
-		_debug_overview_label.text = (
+		var debug_text: String = (
 			"VIEW: %s     INPUT: %s\n" % [camera_view, input_mode]
 			+ "VIRTUAL PITCH: %+.3f     ROLL: %+.3f\n" % [pitch, roll]
 			+ "CAMERA YAW: %+.1f°     PITCH: %+.1f°\n" % [camera_yaw, camera_pitch]
@@ -128,8 +141,29 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
 			+ "LIFT FORCE: (%.0f, %.0f, %.0f) N\n" % [lift_force_vector.x, lift_force_vector.y, lift_force_vector.z]
 			+ "LIFT TWR: %.2f / %.2f    GRAVITY: %.2f m/s²\n" % [actual_lift_twr, maximum_lift_twr, gravity_magnitude]
-			+ "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
+			+ "PREDICTED TORQUE: (%.1f, %.1f, %.1f) N·m - NOT APPLIED\n" % [predicted_torque.x, predicted_torque.y, predicted_torque.z]
+			+ "VANE CONFIG: %s (%d registered)\n" % ["VALID" if vane_configuration_valid else "INVALID", vane_count]
 		)
+		for vane_state in vane_states:
+			var state: Dictionary = vane_state
+			debug_text += "%s [%s] integrity %.2f failed=%s authority %.3f TWR\n" % [
+				str(state.get("vane_id", "UNKNOWN")),
+				str(state.get("group_id", "UNKNOWN")),
+				float(state.get("integrity", 0.0)),
+				str(state.get("failed", false)),
+				float(state.get("effective_authority_twr", 0.0)),
+			]
+		for vane_contribution in vane_contributions:
+			var contribution: Dictionary = vane_contribution
+			var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
+			var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
+			debug_text += "  FORCE %s: (%.0f, %.0f, %.0f) N | MOMENT (%.1f, %.1f, %.1f)\n" % [
+				str(contribution.get("vane_id", "UNKNOWN")),
+				vane_force.x, vane_force.y, vane_force.z,
+				vane_torque.x, vane_torque.y, vane_torque.z,
+			]
+		debug_text += "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
+		_debug_overview_label.text = debug_text
 
 
 func _build_hud() -> void:
@@ -164,6 +198,8 @@ func _build_hud() -> void:
 	_lift_force_label = _add_label(status_content, "COLLECTIVE FORCE  0 N", 12, COLOR_TEXT)
 	_lift_twr_label = _add_label(status_content, "LIFT TWR          0.00 / 1.10", 12, COLOR_TEXT)
 	_hover_power_label = _add_label(status_content, "HOVER THRESHOLD   90.9% OUTPUT", 12, COLOR_TEXT)
+	_vane_status_label = _add_label(status_content, "VANE ARRAY        5 REGISTERED / 5 HEALTHY", 12, COLOR_TEXT)
+	_predicted_torque_label = _add_label(status_content, "PREDICTED TORQUE  0.0 N·m (NOT APPLIED)", 12, COLOR_MUTED)
 
 	var reticle := Label.new()
 	reticle.name = "AttitudeReferencePlaceholder"
@@ -179,11 +215,11 @@ func _build_hud() -> void:
 	reticle.offset_bottom = 12.0
 	root.add_child(reticle)
 
-	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(440.0, 260.0))
+	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(520.0, 410.0))
 	_debug_overview_panel.name = "DebugOverviewPanel"
 	_debug_overview_panel.visible = false
 	var debug_content := _create_panel_content(_debug_overview_panel)
-	_add_label(debug_content, "FLIGHT / CAMERA DEBUG OVERVIEW", 13, COLOR_ACCENT)
+	_add_label(debug_content, "FLIGHT / VANE DEBUG OVERVIEW", 13, COLOR_ACCENT)
 	_debug_overview_label = _add_label(debug_content, "VIEW: COCKPIT", 12, COLOR_TEXT)
 
 	var instruction_panel := PanelContainer.new()
@@ -228,7 +264,7 @@ func _create_anchored_panel(parent: Control) -> PanelContainer:
 	panel.offset_left = -380.0
 	panel.offset_right = -20.0
 	panel.offset_top = 20.0
-	panel.offset_bottom = 360.0
+	panel.offset_bottom = 410.0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", _make_panel_style())
 	parent.add_child(panel)
