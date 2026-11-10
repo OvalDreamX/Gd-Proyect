@@ -1,26 +1,27 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ship.tscn" id="2_ship"]
+[ext_resource type="Script" path="res://scripts/test_range_environment.gd" id="3_environment"]
 
 [sub_resource type="Environment" id="Environment_world"]
 background_mode = 1
-background_color = Color(0.055, 0.075, 0.105, 1)
+background_color = Color(0.38, 0.52, 0.62, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.43, 0.49, 0.56, 1)
-ambient_light_energy = 0.55
+ambient_light_color = Color(0.48, 0.52, 0.55, 1)
+ambient_light_energy = 0.7
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
-size = Vector2(100, 100)
+size = Vector2(1000, 1000)
 
-[sub_resource type="BoxShape3D" id="BoxShape_ground_horizontal"]
-size = Vector3(43.0, 1.0, 100.0)
+[sub_resource type="BoxShape3D" id="BoxShape_ground_wide"]
+size = Vector3(493, 1, 1000)
 
-[sub_resource type="BoxShape3D" id="BoxShape_ground_vertical"]
-size = Vector3(14.0, 1.0, 43.0)
+[sub_resource type="BoxShape3D" id="BoxShape_ground_center_strip"]
+size = Vector3(14, 1, 493)
 
-[sub_resource type="StandardMaterial3D" id="Material_ground"]
-albedo_color = Color(0.19, 0.22, 0.23, 1)
+[sub_resource type="StandardMaterial3D" id="Material_ground_fallback"]
+albedo_color = Color(0.34, 0.32, 0.25, 1)
 roughness = 1.0
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_pad"]
@@ -31,19 +32,21 @@ size = Vector3(14.0, 0.016, 14.0)
 
 [sub_resource type="StandardMaterial3D" id="Material_pad"]
 albedo_color = Color(0.105, 0.13, 0.15, 1)
-roughness = 1.0
+roughness = 0.92
 
 [sub_resource type="BoxMesh" id="BoxMesh_pad_marking"]
 size = Vector3(14.0, 0.035, 0.12)
 
 [node name="TestRange" type="Node3D"]
+script = ExtResource("3_environment")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_world")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-52, -28, 0)
-light_energy = 1.1
+rotation_degrees = Vector3(-48, -32, 0)
+light_color = Color(1, 0.91, 0.78, 1)
+light_energy = 1.15
 shadow_enabled = true
 
 [node name="Ground" type="StaticBody3D" parent="."]
@@ -52,23 +55,23 @@ collision_mask = 1
 
 [node name="GroundMesh" type="MeshInstance3D" parent="Ground"]
 mesh = SubResource("PlaneMesh_ground")
-material_override = SubResource("Material_ground")
+material_override = SubResource("Material_ground_fallback")
 
 [node name="GroundCollisionWest" type="CollisionShape3D" parent="Ground"]
-position = Vector3(-28.5, -0.5, 0)
-shape = SubResource("BoxShape_ground_horizontal")
+position = Vector3(-253.5, -0.5, 0)
+shape = SubResource("BoxShape_ground_wide")
 
 [node name="GroundCollisionEast" type="CollisionShape3D" parent="Ground"]
-position = Vector3(28.5, -0.5, 0)
-shape = SubResource("BoxShape_ground_horizontal")
+position = Vector3(253.5, -0.5, 0)
+shape = SubResource("BoxShape_ground_wide")
 
 [node name="GroundCollisionNorth" type="CollisionShape3D" parent="Ground"]
-position = Vector3(0, -0.5, -28.5)
-shape = SubResource("BoxShape_ground_vertical")
+position = Vector3(0, -0.5, -253.5)
+shape = SubResource("BoxShape_ground_center_strip")
 
 [node name="GroundCollisionSouth" type="CollisionShape3D" parent="Ground"]
-position = Vector3(0, -0.5, 28.5)
-shape = SubResource("BoxShape_ground_vertical")
+position = Vector3(0, -0.5, 253.5)
+shape = SubResource("BoxShape_ground_center_strip")
 
 [node name="LandingPad" type="StaticBody3D" parent="."]
 position = Vector3(0, 0.008, 0)

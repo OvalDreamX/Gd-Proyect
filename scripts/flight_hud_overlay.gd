@@ -9,6 +9,10 @@ const COLOR_SECONDARY := Color(0.29, 0.69, 0.56, 0.76)
 const COLOR_DIM := Color(0.20, 0.46, 0.39, 0.60)
 const COLOR_COMMAND := Color(1.00, 0.77, 0.36, 0.96)
 const COLOR_WARNING := Color(1.00, 0.48, 0.30, 0.96)
+const COLOR_FLIGHT_PATH := Color(0.48, 0.88, 1.00, 0.96)
+const HUD_CONTENT_SCALE: float = 0.90
+const FLIGHT_PATH_PIXELS_PER_DEGREE: float = 4.0
+const FLIGHT_PATH_MAX_ANGLE_DEGREES: float = 23.0
 const BASE_WIDTH: float = 1280.0
 const BASE_HEIGHT: float = 720.0
 
@@ -20,6 +24,52 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	queue_redraw()
 
 
+## Projects the ship's world-space velocity into the cockpit's forward view.
+## The returned marker is relative to the nose reference, not the horizon.
+## Reverse/sideways motion is intentionally hidden because it is outside this
+## forward-looking HUD's useful projection range.
+static func calculate_flight_path_marker(
+		velocity_world: Vector3,
+		ship_basis: Basis,
+		hud_center: Vector2,
+		pixels_per_degree: float = FLIGHT_PATH_PIXELS_PER_DEGREE,
+		maximum_angle_degrees: float = FLIGHT_PATH_MAX_ANGLE_DEGREES,
+		minimum_speed_mps: float = 2.0
+) -> Dictionary:
+	var result: Dictionary = {
+		"visible": false,
+		"position": hud_center,
+		"speed_mps": velocity_world.length(),
+		"lateral_angle_degrees": 0.0,
+		"vertical_angle_degrees": 0.0,
+		"clipped": false,
+	}
+	if velocity_world.length_squared() < minimum_speed_mps * minimum_speed_mps:
+		return result
+
+	var local_velocity: Vector3 = ship_basis.orthonormalized().inverse() * velocity_world
+	var forward_speed: float = -local_velocity.z
+	if forward_speed < 1.0:
+		return result
+
+	var lateral_angle: float = rad_to_deg(atan2(local_velocity.x, forward_speed))
+	var vertical_reference_speed: float = sqrt(
+		local_velocity.x * local_velocity.x + forward_speed * forward_speed
+	)
+	var vertical_angle: float = rad_to_deg(atan2(local_velocity.y, vertical_reference_speed))
+	var clipped_lateral: float = clampf(lateral_angle, -maximum_angle_degrees, maximum_angle_degrees)
+	var clipped_vertical: float = clampf(vertical_angle, -maximum_angle_degrees, maximum_angle_degrees)
+	result["visible"] = true
+	result["position"] = hud_center + Vector2(
+		clipped_lateral * pixels_per_degree,
+		-clipped_vertical * pixels_per_degree
+	)
+	result["lateral_angle_degrees"] = lateral_angle
+	result["vertical_angle_degrees"] = vertical_angle
+	result["clipped"] = not is_equal_approx(lateral_angle, clipped_lateral) or not is_equal_approx(vertical_angle, clipped_vertical)
+	return result
+
+
 func _draw() -> void:
 	if _telemetry.is_empty() or size.x <= 0.0 or size.y <= 0.0:
 		return
@@ -29,7 +79,7 @@ func _draw() -> void:
 	var display_settings: Node = get_node_or_null("/root/DisplaySettings")
 	if display_settings != null and display_settings.has_method("get_hud_scale"):
 		ui_scale = float(display_settings.call("get_hud_scale"))
-	var scale_factor: float = fit_scale * clampf(ui_scale, 0.8, 1.0)
+	var scale_factor: float = fit_scale * clampf(ui_scale, 0.8, 1.0) * HUD_CONTENT_SCALE
 	var logical_size: Vector2 = size / maxf(scale_factor, 0.001)
 	var extra_space: Vector2 = logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)
 	var draw_offset := extra_space * 0.5
@@ -73,6 +123,7 @@ func _draw() -> void:
 	_draw_heading_tape(font, heading_degrees)
 	_draw_flight_data(font, velocity, position, pitch_degrees, roll_degrees, heading_degrees)
 	_draw_attitude_ladder(font, pitch_degrees, roll_degrees)
+	_draw_flight_path_marker(velocity, basis)
 	_draw_input_indicators(font, pitch_input, roll_input, yaw_input)
 	_draw_bottom_guidance(font)
 
@@ -92,30 +143,30 @@ func _draw_side_gauge(
 	var top: float = 188.0
 	var bottom: float = 486.0
 	var height: float = bottom - top
-	var bar_width: float = 12.0
+	var bar_width: float = 8.0
 	var actual_fraction: float = clampf(actual_value / maxf(maximum_value, 0.001), 0.0, 1.0)
 	var command_fraction: float = clampf(command_value / maxf(maximum_value, 0.001), 0.0, 1.0)
 	var actual_y: float = bottom - actual_fraction * height
 	var command_y: float = bottom - command_fraction * height
 	var bar_rect := Rect2(center_x - bar_width * 0.5, top, bar_width, height)
 
-	_draw_text(font, Vector2(center_x - 64.0, 132.0), gauge_name, 13, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 128.0)
-	_draw_text(font, Vector2(center_x - 64.0, 151.0), gauge_subtitle, 10, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 128.0)
+	_draw_text(font, Vector2(center_x - 64.0, 132.0), gauge_name, 11, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 128.0)
+	_draw_text(font, Vector2(center_x - 64.0, 151.0), gauge_subtitle, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 128.0)
 	_draw_text(
 		font,
 		Vector2(center_x - 66.0, 177.0),
 		"ACT %s%s" % [String.num(actual_value, 1), unit],
-		12,
+		10,
 		COLOR_PRIMARY,
 		HORIZONTAL_ALIGNMENT_CENTER,
 		132.0
 	)
 
-	draw_rect(bar_rect, COLOR_DIM, false, 1.4)
+	draw_rect(bar_rect, COLOR_DIM, false, 0.9)
 	for tick_index in range(0, 5):
 		var tick_fraction: float = float(tick_index) / 4.0
 		var tick_y: float = bottom - tick_fraction * height
-		draw_line(Vector2(center_x + 9.0, tick_y), Vector2(center_x + 17.0, tick_y), COLOR_DIM, 1.0)
+		draw_line(Vector2(center_x + 7.0, tick_y), Vector2(center_x + 13.0, tick_y), COLOR_DIM, 0.7)
 		if gauge_name == "FIELD POWER":
 			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(tick_index * 25), 9, COLOR_DIM)
 		else:
@@ -123,16 +174,16 @@ func _draw_side_gauge(
 
 	if actual_fraction > 0.001:
 		draw_rect(
-			Rect2(center_x - 3.0, actual_y, 6.0, bottom - actual_y),
+			Rect2(center_x - 2.0, actual_y, 4.0, bottom - actual_y),
 			COLOR_PRIMARY,
 			true
 		)
-		draw_line(Vector2(center_x - 9.0, actual_y), Vector2(center_x + 9.0, actual_y), COLOR_PRIMARY, 2.0)
+		draw_line(Vector2(center_x - 7.0, actual_y), Vector2(center_x + 7.0, actual_y), COLOR_PRIMARY, 1.2)
 
 	# The pilot command is an independent amber tick. The filled output bar
 	# follows the actuator value and therefore visibly lags the command.
-	draw_line(Vector2(center_x - 19.0, command_y), Vector2(center_x + 21.0, command_y), COLOR_COMMAND, 2.0)
-	draw_line(Vector2(center_x - 19.0, command_y - 4.0), Vector2(center_x - 19.0, command_y + 4.0), COLOR_COMMAND, 1.5)
+	draw_line(Vector2(center_x - 15.0, command_y), Vector2(center_x + 16.0, command_y), COLOR_COMMAND, 1.2)
+	draw_line(Vector2(center_x - 15.0, command_y - 3.0), Vector2(center_x - 15.0, command_y + 3.0), COLOR_COMMAND, 1.0)
 	var command_label: String = "SET %s%s" % [String.num(command_value, 1), unit]
 	var label_y: float = clampf(command_y - 7.0, top + 10.0, bottom - 5.0)
 	_draw_text(font, Vector2(center_x - 58.0, label_y), command_label, 10, COLOR_COMMAND, HORIZONTAL_ALIGNMENT_CENTER, 116.0)
@@ -147,7 +198,7 @@ func _draw_top_status(font: Font, field_state: String, assistance_enabled: bool)
 		state_color = COLOR_DIM
 	elif field_state == "STARTING":
 		state_color = COLOR_COMMAND
-	_draw_text(font, Vector2(440.0, 82.0), "REPULSORLIFT  //  %s" % field_state, 15, state_color, HORIZONTAL_ALIGNMENT_CENTER, 400.0)
+	_draw_text(font, Vector2(440.0, 82.0), "REPULSORLIFT  //  %s" % field_state, 12, state_color, HORIZONTAL_ALIGNMENT_CENTER, 400.0)
 	_draw_text(
 		font,
 		Vector2(520.0, 105.0),
@@ -168,30 +219,30 @@ func _draw_corner_frame() -> void:
 	]
 	var arm: float = 18.0
 	# Short frame segments leave the center visually open.
-	draw_line(corners[0], corners[0] + Vector2(arm, 0), frame_color, 1.0)
-	draw_line(corners[0], corners[0] + Vector2(0, arm), frame_color, 1.0)
-	draw_line(corners[1], corners[1] - Vector2(arm, 0), frame_color, 1.0)
-	draw_line(corners[1], corners[1] + Vector2(0, arm), frame_color, 1.0)
-	draw_line(corners[2], corners[2] + Vector2(arm, 0), frame_color, 1.0)
-	draw_line(corners[2], corners[2] - Vector2(0, arm), frame_color, 1.0)
-	draw_line(corners[3], corners[3] - Vector2(arm, 0), frame_color, 1.0)
-	draw_line(corners[3], corners[3] - Vector2(0, arm), frame_color, 1.0)
+	draw_line(corners[0], corners[0] + Vector2(arm, 0), frame_color, 0.7)
+	draw_line(corners[0], corners[0] + Vector2(0, arm), frame_color, 0.7)
+	draw_line(corners[1], corners[1] - Vector2(arm, 0), frame_color, 0.7)
+	draw_line(corners[1], corners[1] + Vector2(0, arm), frame_color, 0.7)
+	draw_line(corners[2], corners[2] + Vector2(arm, 0), frame_color, 0.7)
+	draw_line(corners[2], corners[2] - Vector2(0, arm), frame_color, 0.7)
+	draw_line(corners[3], corners[3] - Vector2(arm, 0), frame_color, 0.7)
+	draw_line(corners[3], corners[3] - Vector2(0, arm), frame_color, 0.7)
 
 
 func _draw_heading_tape(font: Font, heading_degrees: float) -> void:
 	var center_x: float = 640.0
 	var y: float = 151.0
 	var half_width: float = 205.0
-	draw_line(Vector2(center_x - half_width, y), Vector2(center_x + half_width, y), COLOR_DIM, 1.0)
+	draw_line(Vector2(center_x - half_width, y), Vector2(center_x + half_width, y), COLOR_DIM, 0.7)
 	for offset in range(-60, 61, 5):
 		var tick_x: float = center_x + float(offset) * 3.1
 		var tick_height: float = 13.0 if posmod(offset, 10) == 0 else 6.0
-		draw_line(Vector2(tick_x, y), Vector2(tick_x, y + tick_height), COLOR_SECONDARY, 1.0)
+		draw_line(Vector2(tick_x, y), Vector2(tick_x, y + tick_height), COLOR_SECONDARY, 0.7)
 		if posmod(offset, 10) == 0:
 			var label_heading: int = int(round(fposmod(heading_degrees + float(offset), 360.0)))
 			_draw_text(font, Vector2(tick_x - 16.0, y - 8.0), "%03d" % label_heading, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 32.0)
-	draw_line(Vector2(center_x, y - 6.0), Vector2(center_x, y + 17.0), COLOR_PRIMARY, 2.0)
-	_draw_text(font, Vector2(center_x - 42.0, 176.0), "%03d°" % int(round(heading_degrees)), 14, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 84.0)
+	draw_line(Vector2(center_x, y - 6.0), Vector2(center_x, y + 17.0), COLOR_PRIMARY, 1.3)
+	_draw_text(font, Vector2(center_x - 42.0, 176.0), "%03d°" % int(round(heading_degrees)), 12, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 84.0)
 
 
 func _draw_flight_data(
@@ -213,14 +264,14 @@ func _draw_flight_data(
 
 func _draw_data_block(font: Font, origin: Vector2, title: String, value: String, unit: String) -> void:
 	_draw_text(font, origin, title, 11, COLOR_SECONDARY)
-	_draw_text(font, origin + Vector2(0.0, 29.0), value, 24, COLOR_PRIMARY)
-	_draw_text(font, origin + Vector2(0.0, 47.0), unit, 9, COLOR_SECONDARY)
+	_draw_text(font, origin + Vector2(0.0, 25.0), value, 20, COLOR_PRIMARY)
+	_draw_text(font, origin + Vector2(0.0, 41.0), unit, 8, COLOR_SECONDARY)
 
 
 func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float) -> void:
 	var center := Vector2(640.0, 348.0)
-	var half_width: float = 168.0
-	var pitch_scale: float = 3.2
+	var half_width: float = 148.0
+	var pitch_scale: float = 2.8
 	var clipped_pitch: float = clampf(pitch_degrees, -40.0, 40.0)
 
 	# Draw the pitch ladder in a ship-relative frame. Rotate its endpoints
@@ -235,48 +286,66 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float
 		var line_color: Color = COLOR_PRIMARY if mark == 0 else COLOR_SECONDARY
 		var local_start := Vector2(-line_half_width, line_y)
 		var local_end := Vector2(line_half_width, line_y)
-		draw_line(_rotate_point(local_start, center, roll_radians), _rotate_point(local_end, center, roll_radians), line_color, 1.3 if long_mark else 0.8)
+		draw_line(_rotate_point(local_start, center, roll_radians), _rotate_point(local_end, center, roll_radians), line_color, 0.9 if long_mark else 0.6)
 		if long_mark and mark != 0:
 			var label_text: String = "%+d" % mark
 			var left_label_point := _rotate_point(Vector2(-line_half_width - 36.0, line_y + 4.0), center, roll_radians)
 			var right_label_point := _rotate_point(Vector2(line_half_width + 9.0, line_y + 4.0), center, roll_radians)
 			_draw_text(font, left_label_point, label_text, 10, COLOR_SECONDARY)
 			_draw_text(font, right_label_point, label_text, 10, COLOR_SECONDARY)
-	draw_rect(Rect2(408.0, 236.0, 464.0, 224.0), COLOR_DIM, false, 1.0)
+	draw_rect(Rect2(408.0, 236.0, 464.0, 224.0), COLOR_DIM, false, 0.7)
 
 	# Fixed aircraft reference: two wings and a central aiming mark.
-	draw_line(Vector2(573.0, center.y), Vector2(619.0, center.y), COLOR_PRIMARY, 2.6)
-	draw_line(Vector2(661.0, center.y), Vector2(707.0, center.y), COLOR_PRIMARY, 2.6)
-	draw_line(Vector2(619.0, center.y), Vector2(630.0, center.y + 7.0), COLOR_PRIMARY, 2.0)
-	draw_line(Vector2(661.0, center.y), Vector2(650.0, center.y + 7.0), COLOR_PRIMARY, 2.0)
-	draw_circle(center, 3.0, COLOR_PRIMARY)
+	draw_line(Vector2(573.0, center.y), Vector2(619.0, center.y), COLOR_PRIMARY, 1.6)
+	draw_line(Vector2(661.0, center.y), Vector2(707.0, center.y), COLOR_PRIMARY, 1.6)
+	draw_line(Vector2(619.0, center.y), Vector2(630.0, center.y + 7.0), COLOR_PRIMARY, 1.3)
+	draw_line(Vector2(661.0, center.y), Vector2(650.0, center.y + 7.0), COLOR_PRIMARY, 1.3)
+	draw_circle(center, 2.0, COLOR_PRIMARY)
 	# Bank reference ticks above the ladder.
-	draw_arc(Vector2(640.0, 242.0), 42.0, PI * 1.18, PI * 1.82, 32, COLOR_DIM, 1.0)
-	draw_line(Vector2(640.0, 194.0), Vector2(640.0, 205.0), COLOR_PRIMARY, 1.5)
+	draw_arc(Vector2(640.0, 242.0), 42.0, PI * 1.18, PI * 1.82, 32, COLOR_DIM, 0.7)
+	draw_line(Vector2(640.0, 194.0), Vector2(640.0, 205.0), COLOR_PRIMARY, 1.0)
 	_draw_text(font, Vector2(585.0, 220.0), "BANK", 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 110.0)
 
 
+func _draw_flight_path_marker(velocity_world: Vector3, ship_basis: Basis) -> void:
+	var center := Vector2(640.0, 348.0)
+	var marker: Dictionary = calculate_flight_path_marker(velocity_world, ship_basis, center)
+	if not bool(marker.get("visible", false)):
+		return
+
+	var point: Vector2 = marker.get("position", center)
+	var wing_span: float = 10.0
+	var tail_length: float = 6.0
+	# Distinct cyan flight-path symbol; the fixed green aircraft reference remains
+	# the nose/boresight. Their separation visualizes angle of attack and drift.
+	draw_line(point + Vector2(-wing_span, 0.0), point + Vector2(-3.0, 0.0), COLOR_FLIGHT_PATH, 1.1)
+	draw_line(point + Vector2(3.0, 0.0), point + Vector2(wing_span, 0.0), COLOR_FLIGHT_PATH, 1.1)
+	draw_line(point + Vector2(0.0, -3.0), point + Vector2(0.0, -tail_length), COLOR_FLIGHT_PATH, 0.9)
+	draw_arc(point, 3.0, 0.0, TAU, 20, COLOR_FLIGHT_PATH, 1.0)
+	_draw_text(ThemeDB.fallback_font, point + Vector2(12.0, -5.0), "FPV", 8, COLOR_FLIGHT_PATH)
+
+
 func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, yaw_input: float) -> void:
-	var square := Rect2(526.0, 550.0, 116.0, 116.0)
+	var square := Rect2(532.0, 558.0, 104.0, 104.0)
 	var center: Vector2 = square.position + square.size * 0.5
-	draw_rect(square, COLOR_SECONDARY, false, 1.2)
-	draw_line(Vector2(center.x, square.position.y + 5.0), Vector2(center.x, square.end.y - 5.0), COLOR_DIM, 1.0)
-	draw_line(Vector2(square.position.x + 5.0, center.y), Vector2(square.end.x - 5.0, center.y), COLOR_DIM, 1.0)
-	draw_line(Vector2(square.position.x + 10.0, center.y), Vector2(square.end.x - 10.0, center.y), COLOR_SECONDARY, 1.6)
-	draw_line(Vector2(center.x, square.position.y + 10.0), Vector2(center.x, square.end.y - 10.0), COLOR_SECONDARY, 1.6)
+	draw_rect(square, COLOR_SECONDARY, false, 0.8)
+	draw_line(Vector2(center.x, square.position.y + 5.0), Vector2(center.x, square.end.y - 5.0), COLOR_DIM, 0.7)
+	draw_line(Vector2(square.position.x + 5.0, center.y), Vector2(square.end.x - 5.0, center.y), COLOR_DIM, 0.7)
+	draw_line(Vector2(square.position.x + 10.0, center.y), Vector2(square.end.x - 10.0, center.y), COLOR_SECONDARY, 1.0)
+	draw_line(Vector2(center.x, square.position.y + 10.0), Vector2(center.x, square.end.y - 10.0), COLOR_SECONDARY, 1.0)
 	var stick_position := Vector2(
 		center.x + clampf(roll_input, -1.0, 1.0) * 48.0,
 		center.y + clampf(pitch_input, -1.0, 1.0) * 48.0
 	)
-	draw_circle(stick_position, 7.0, COLOR_PRIMARY)
-	draw_circle(stick_position, 11.0, COLOR_SECONDARY, false, 1.0)
+	draw_circle(stick_position, 5.0, COLOR_PRIMARY)
+	draw_circle(stick_position, 8.0, COLOR_SECONDARY, false, 0.7)
 	_draw_text(font, Vector2(516.0, 684.0), "PITCH / ROLL", 10, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 136.0)
 
 	# Rudder command is a laterally moving, thick vertical marker.
 	var rudder_axis_center_x: float = 730.0
-	draw_line(Vector2(rudder_axis_center_x - 42.0, 608.0), Vector2(rudder_axis_center_x + 42.0, 608.0), COLOR_DIM, 1.0)
+	draw_line(Vector2(rudder_axis_center_x - 38.0, 608.0), Vector2(rudder_axis_center_x + 38.0, 608.0), COLOR_DIM, 0.7)
 	var rudder_x: float = rudder_axis_center_x + clampf(yaw_input, -1.0, 1.0) * 36.0
-	draw_line(Vector2(rudder_x, 558.0), Vector2(rudder_x, 660.0), COLOR_PRIMARY, 4.0)
+	draw_line(Vector2(rudder_x, 566.0), Vector2(rudder_x, 652.0), COLOR_PRIMARY, 2.0)
 	_draw_text(font, Vector2(680.0, 684.0), "RUDDER", 10, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 100.0)
 
 
