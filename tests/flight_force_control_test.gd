@@ -68,6 +68,26 @@ func _run_tests() -> void:
 	_expect(main_force.y > 0.0 and absf(main_force.z) <= EPSILON, "90-degree main vector is pure ship-local vertical lift")
 	_expect_near(neutral_torque.length(), 0.0, EPSILON, "Neutral healthy field has no unwanted baseline torque")
 
+	# Main-vector throttle controls translation, not whether the online field
+	# can maneuver. At zero throttle the main force is zero, but all control
+	# groups remain available and receive a bounded 20% reserve boost.
+	system.apply_flight_control_forces(true, 0.0, 90.0, 1.0, 1.0, 1.0, 0.5, 1.2)
+	telemetry = system.get_telemetry()
+	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
+	_expect_near(main_force.length(), 0.0, EPSILON, "Zero main-vector throttle produces no translational force")
+	var idle_pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
+	var idle_roll_forces: Array[Dictionary] = _forces_of_kind(telemetry, "roll")
+	var idle_yaw_forces: Array[Dictionary] = _forces_of_kind(telemetry, "yaw")
+	_expect_equal(idle_pitch_forces.size(), 2, "Pitch remains available with the field online and main-vector throttle at zero")
+	_expect_equal(idle_roll_forces.size(), 2, "Roll remains available with the field online and main-vector throttle at zero")
+	_expect_equal(idle_yaw_forces.size(), 2, "Yaw remains available with the field online and main-vector throttle at zero")
+	_expect_near(float(telemetry.get("maneuver_power_multiplier", 0.0)), 1.2, EPSILON, "Idle main-vector allocation provides a capped 20% maneuver reserve")
+	var idle_pitch_magnitude: float = _sum_force_magnitudes(idle_pitch_forces)
+	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0, 0.5, 1.2)
+	telemetry = system.get_telemetry()	
+	var full_power_pitch_magnitude: float = _sum_force_magnitudes(_forces_of_kind(telemetry, "pitch"))
+	_expect_near(idle_pitch_magnitude / maxf(full_power_pitch_magnitude, 0.001), 1.2, 0.01, "Idle throttle increases maneuver force by only the configured 20%")
+
 	# Pitch: front pair up, rear pair down. Their translations cancel while
 	# their separated application points produce positive nose-up pitch torque.
 	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0)
@@ -141,6 +161,20 @@ func _run_tests() -> void:
 	var damaged_front_point: Vector3 = damaged_front.get("application_point_world", Vector3.ZERO)
 	_expect(damaged_front_point.x < ship.global_position.x, "Front resultant shifts toward the healthy left-front vane")
 	_expect(damaged_roll_moment.z < -EPSILON, "Asymmetric front damage produces the expected unwanted roll")
+	var front_pair_ids: Array[StringName] = [&"bottom_front_left", &"bottom_front_right"]
+	var damaged_no_compensation: Dictionary = vane_controller.calculate_vane_set_resultant(
+		front_pair_ids, Vector3.UP, 1000.0, ship.global_transform, ship.center_of_mass, 0.0, 1.2
+	)
+	var damaged_with_compensation: Dictionary = vane_controller.calculate_vane_set_resultant(
+		front_pair_ids, Vector3.UP, 1000.0, ship.global_transform, ship.center_of_mass, 0.5, 1.2
+	)
+	var compensated_authority: float = float(damaged_with_compensation.get("effective_authority_twr", 0.0))
+	var uncompensated_authority: float = float(damaged_no_compensation.get("effective_authority_twr", 0.0))
+	_expect(compensated_authority > uncompensated_authority, "FCC redistribution uses healthy spare vane authority to recover part of a damaged group's output")
+	_expect(compensated_authority < float(damaged_with_compensation.get("nominal_authority_twr", 0.0)), "Bounded redistribution never conceals the entire damaged-vane deficit")
+	var uncompensated_point: Vector3 = damaged_no_compensation.get("effective_application_point_world", Vector3.ZERO)
+	var compensated_point: Vector3 = damaged_with_compensation.get("effective_application_point_world", Vector3.ZERO)
+	_expect(compensated_point.x < uncompensated_point.x, "Redistribution shifts the resultant toward the healthy vane without restoring symmetry")
 
 	# F3 controls only the visualization; it does not modify any force values.
 	var debug_node := ship.get_node("ForceVectorDebug") as ForceVectorDebug
@@ -181,6 +215,14 @@ func _sum_forces(entries: Array[Dictionary]) -> Vector3:
 	var total: Vector3 = Vector3.ZERO
 	for entry in entries:
 		total += entry.get("force_world", Vector3.ZERO)
+	return total
+
+
+func _sum_force_magnitudes(entries: Array[Dictionary]) -> float:
+	var total: float = 0.0
+	for entry in entries:
+		var force: Vector3 = entry.get("force_world", Vector3.ZERO)
+		total += force.length()
 	return total
 
 

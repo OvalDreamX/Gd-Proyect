@@ -55,6 +55,7 @@ const TURBULENCE_AXIS_SCALE := Vector3(0.7, 0.25, 0.7)
 var _wind_noise: FastNoiseLite
 var _wind_elapsed_seconds: float = 0.0
 var _last_altitude_m: float = 0.0
+var _last_up_world: Vector3 = Vector3.UP
 var _last_density_kg_m3: float = 0.0
 var _last_wind_velocity_world: Vector3 = Vector3.ZERO
 var _last_turbulence_velocity_world: Vector3 = Vector3.ZERO
@@ -96,6 +97,7 @@ func _physics_process(delta: float) -> void:
 
 	var gravity_world: Vector3 = _ship.get_gravity()
 	var up_world: Vector3 = -gravity_world.normalized() if gravity_world.length_squared() > 0.000001 else Vector3.UP
+	_last_up_world = up_world
 	# The body origin is the altitude reference for this low-altitude prototype.
 	# It avoids reading RigidBody3D.center_of_mass in AUTO mode, where that
 	# property does not expose the solver's computed center of mass.
@@ -185,6 +187,7 @@ func _update_wind_sample() -> void:
 
 func _reset_frame_telemetry() -> void:
 	_last_altitude_m = 0.0
+	_last_up_world = Vector3.UP
 	_last_density_kg_m3 = 0.0
 	_last_wind_velocity_world = Vector3.ZERO
 	_last_turbulence_velocity_world = Vector3.ZERO
@@ -368,6 +371,7 @@ func get_telemetry() -> Dictionary:
 	return {
 		"atmosphere_enabled": atmosphere_enabled,
 		"atmosphere_altitude_m": _last_altitude_m,
+		"atmosphere_up_world": _last_up_world,
 		"atmosphere_density_kg_m3": _last_density_kg_m3,
 		"atmosphere_velocity_world": _last_wind_velocity_world,
 		"atmosphere_mean_wind_velocity_world": atmosphere_velocity_world,

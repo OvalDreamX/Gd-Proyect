@@ -18,6 +18,8 @@ func _run_tests() -> void:
 	var computer := FlightControlComputer.new()
 
 	_expect(computer.assistance_enabled, "FCC assistance is enabled by default")
+	_expect_near(float(computer.calculate_control_outputs(0.0, 0.0, 0.0, Vector3.ZERO, Basis.IDENTITY, true).get("fcc_vane_redistribution_fraction", 0.0)), 0.5, EPSILON, "Assisted FCC publishes a bounded 50% damage-deficit redistribution budget")
+	_expect_near(float(computer.calculate_control_outputs(0.0, 0.0, 0.0, Vector3.ZERO, Basis.IDENTITY, true).get("fcc_maximum_vane_output_multiplier", 0.0)), 1.2, EPSILON, "Assisted FCC caps healthy vane over-output at 1.2x nominal")
 
 	# Pilot requests are converted into ship-local angular-rate setpoints.
 	var snapshot: Dictionary = computer.calculate_control_outputs(
@@ -103,6 +105,7 @@ func _run_tests() -> void:
 		EPSILON,
 		"Assistance OFF passes shaped pitch/yaw/roll commands directly to the vane allocator"
 	)
+	_expect_near(float(snapshot.get("fcc_vane_redistribution_fraction", -1.0)), 0.0, EPSILON, "Direct-vane mode disables FCC redistribution")
 	_expect(not bool(snapshot.get("fcc_any_axis_saturated", true)), "Direct mode does not report FCC saturation")
 
 	# An unavailable field cannot generate stabilizing or pilot vane commands.

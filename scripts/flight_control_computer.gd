@@ -26,6 +26,10 @@ class_name FlightControlComputer
 const INPUT_DEADZONE: float = 0.01
 ## Blend from linear response toward a cubic response. 0.18 = 18% curve.
 const INPUT_CURVATURE: float = 0.18
+## The FCC may use half of a vane group lost authority, but healthy vanes may
+## exceed nominal output by no more than 20%. This leaves visible residual damage.
+const VANE_REDISTRIBUTION_FRACTION: float = 0.50
+const MAXIMUM_VANE_OUTPUT_MULTIPLIER: float = 1.20
 
 var assistance_enabled: bool = true
 
@@ -127,6 +131,8 @@ func calculate_control_outputs(
 		"fcc_any_axis_saturated": pitch_saturated or roll_saturated or yaw_saturated,
 		"fcc_rate_response_gain": rate_response_gain,
 		"fcc_maximum_control_output": maximum_control_output,
+		"fcc_vane_redistribution_fraction": VANE_REDISTRIBUTION_FRACTION if assistance_enabled else 0.0,
+		"fcc_maximum_vane_output_multiplier": MAXIMUM_VANE_OUTPUT_MULTIPLIER,
 	}
 
 

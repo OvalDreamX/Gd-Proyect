@@ -30,7 +30,7 @@ func update_telemetry(telemetry: Dictionary) -> void:
 ## forward-looking HUD's useful projection range.
 static func calculate_flight_path_marker(
 		velocity_world: Vector3,
-		ship_basis: Basis,
+		view_basis: Basis,
 		hud_center: Vector2,
 		pixels_per_degree: float = FLIGHT_PATH_PIXELS_PER_DEGREE,
 		maximum_angle_degrees: float = FLIGHT_PATH_MAX_ANGLE_DEGREES,
@@ -47,7 +47,7 @@ static func calculate_flight_path_marker(
 	if velocity_world.length_squared() < minimum_speed_mps * minimum_speed_mps:
 		return result
 
-	var local_velocity: Vector3 = ship_basis.orthonormalized().inverse() * velocity_world
+	var local_velocity: Vector3 = view_basis.orthonormalized().inverse() * velocity_world
 	var forward_speed: float = -local_velocity.z
 	if forward_speed < 1.0:
 		return result
@@ -88,8 +88,24 @@ func _draw() -> void:
 	var font: Font = ThemeDB.fallback_font
 	var basis: Basis = _telemetry.get("ship_global_basis", Basis.IDENTITY)
 	basis = basis.orthonormalized()
+	var view_basis: Basis = _telemetry.get("view_camera_global_basis", basis)
+	view_basis = view_basis.orthonormalized()
 	var position: Vector3 = _telemetry.get("ship_position", Vector3.ZERO)
 	var velocity: Vector3 = _telemetry.get("ship_linear_velocity", Vector3.ZERO)
+	var local_up_world: Vector3 = _telemetry.get("atmosphere_up_world", Vector3.UP)
+	if local_up_world.length_squared() <= 0.000001:
+		local_up_world = Vector3.UP
+	else:
+		local_up_world = local_up_world.normalized()
+	var local_altitude: float = float(_telemetry.get("atmosphere_altitude_m", (position).dot(local_up_world)))
+	var local_vertical_speed: float = velocity.dot(local_up_world)
+	var atmosphere_enabled: bool = bool(_telemetry.get("atmosphere_enabled", false))
+	var atmosphere_density: float = float(_telemetry.get("atmosphere_density_kg_m3", 0.0))
+	var flight_path_velocity: Vector3 = velocity
+	var speed_label: String = "SPEED"
+	if atmosphere_enabled and atmosphere_density > 0.00001:
+		flight_path_velocity = _telemetry.get("atmosphere_relative_velocity_world", velocity)
+		speed_label = "AIRSPEED"
 	var pitch_input: float = float(_telemetry.get("pitch_command", 0.0))
 	var roll_input: float = float(_telemetry.get("roll_command", 0.0))
 	var yaw_input: float = float(_telemetry.get("yaw_command", 0.0))
@@ -97,8 +113,8 @@ func _draw() -> void:
 	var assistance_enabled: bool = bool(_telemetry.get("fcc_assistance_enabled", true))
 
 	var forward: Vector3 = -basis.z.normalized()
-	var pitch_degrees: float = rad_to_deg(asin(clampf(forward.y, -1.0, 1.0)))
-	var roll_degrees: float = rad_to_deg(atan2(basis.x.y, basis.y.y))
+	var pitch_degrees: float = rad_to_deg(asin(clampf(forward.dot(local_up_world), -1.0, 1.0)))
+	var roll_degrees: float = rad_to_deg(atan2(basis.x.dot(local_up_world), basis.y.dot(local_up_world)))
 	var heading_degrees: float = fposmod(
 		rad_to_deg(atan2(-forward.x, -forward.z)),
 		360.0
@@ -107,7 +123,7 @@ func _draw() -> void:
 	var left_gauge_x: float = 88.0 - extra_space.x * 0.5
 	var right_gauge_x: float = 1178.0 + extra_space.x * 0.5
 	_draw_side_gauge(
-		font, left_gauge_x, "FIELD POWER", "OUTPUT",
+		font, left_gauge_x, "MAIN VECTOR", "OUTPUT",
 		float(_telemetry.get("field_power_output", 0.0)),
 		float(_telemetry.get("field_power_command", 0.0)),
 		1.0, "%"
@@ -121,9 +137,9 @@ func _draw() -> void:
 
 	_draw_top_status(font, field_state, assistance_enabled)
 	_draw_heading_tape(font, heading_degrees)
-	_draw_flight_data(font, velocity, position, pitch_degrees, roll_degrees, heading_degrees)
-	_draw_attitude_ladder(font, pitch_degrees, roll_degrees)
-	_draw_flight_path_marker(velocity, basis)
+	_draw_flight_data(font, flight_path_velocity, local_altitude, local_vertical_speed, speed_label, pitch_degrees, roll_degrees, heading_degrees)
+	_draw_attitude_ladder(font, view_basis, local_up_world)
+	_draw_flight_path_marker(flight_path_velocity, view_basis)
 	_draw_input_indicators(font, pitch_input, roll_input, yaw_input)
 	_draw_bottom_guidance(font)
 
@@ -167,7 +183,7 @@ func _draw_side_gauge(
 		var tick_fraction: float = float(tick_index) / 4.0
 		var tick_y: float = bottom - tick_fraction * height
 		draw_line(Vector2(center_x + 7.0, tick_y), Vector2(center_x + 13.0, tick_y), COLOR_DIM, 0.7)
-		if gauge_name == "FIELD POWER":
+		if gauge_name == "MAIN VECTOR":
 			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(tick_index * 25), 9, COLOR_DIM)
 		else:
 			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(tick_index * 110 / 4), 9, COLOR_DIM)
@@ -247,17 +263,18 @@ func _draw_heading_tape(font: Font, heading_degrees: float) -> void:
 
 func _draw_flight_data(
 		font: Font,
-		velocity: Vector3,
-		position: Vector3,
+		flight_velocity: Vector3,
+		local_altitude: float,
+		local_vertical_speed: float,
+		speed_label: String,
 		pitch_degrees: float,
 		roll_degrees: float,
 		heading_degrees: float
 ) -> void:
-	var speed: float = velocity.length()
-	var vertical_speed: float = velocity.y
-	_draw_data_block(font, Vector2(278.0, 230.0), "SPEED", String.num(speed, 1), "m/s")
-	_draw_data_block(font, Vector2(892.0, 230.0), "LOCAL ALT", String.num(position.y, 1), "m")
-	_draw_data_block(font, Vector2(278.0, 466.0), "VERT SPEED", "%+.1f" % vertical_speed, "m/s")
+	var speed: float = flight_velocity.length()
+	_draw_data_block(font, Vector2(278.0, 230.0), speed_label, String.num(speed, 1), "m/s")
+	_draw_data_block(font, Vector2(892.0, 230.0), "LOCAL ALT", String.num(local_altitude, 1), "m")
+	_draw_data_block(font, Vector2(278.0, 466.0), "VERT SPEED", "%+.1f" % local_vertical_speed, "m/s")
 	_draw_data_block(font, Vector2(892.0, 466.0), "ATTITUDE", "%+.1f / %+.1f" % [pitch_degrees, roll_degrees], "PITCH / BANK")
 	_draw_text(font, Vector2(570.0, 493.0), "HDG %03d°" % int(round(heading_degrees)), 11, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 140.0)
 
@@ -268,7 +285,13 @@ func _draw_data_block(font: Font, origin: Vector2, title: String, value: String,
 	_draw_text(font, origin + Vector2(0.0, 41.0), unit, 8, COLOR_SECONDARY)
 
 
-func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float) -> void:
+func _draw_attitude_ladder(font: Font, view_basis: Basis, local_up_world: Vector3) -> void:
+	# The HUD stays fixed to the screen. Its moving ladder is projected from the
+	# active camera against local world-up, so head-look does not detach cues
+	# from the visible horizon. The fixed aircraft reference remains at screen center.
+	var view_forward: Vector3 = -view_basis.z.normalized()
+	var pitch_degrees: float = rad_to_deg(asin(clampf(view_forward.dot(local_up_world), -1.0, 1.0)))
+	var roll_degrees: float = rad_to_deg(atan2(view_basis.x.dot(local_up_world), view_basis.y.dot(local_up_world)))
 	var center := Vector2(640.0, 348.0)
 	var half_width: float = 148.0
 	var pitch_scale: float = 2.8
@@ -322,7 +345,6 @@ func _draw_flight_path_marker(velocity_world: Vector3, ship_basis: Basis) -> voi
 	draw_line(point + Vector2(3.0, 0.0), point + Vector2(wing_span, 0.0), COLOR_FLIGHT_PATH, 1.1)
 	draw_line(point + Vector2(0.0, -3.0), point + Vector2(0.0, -tail_length), COLOR_FLIGHT_PATH, 0.9)
 	draw_arc(point, 3.0, 0.0, TAU, 20, COLOR_FLIGHT_PATH, 1.0)
-	_draw_text(ThemeDB.fallback_font, point + Vector2(12.0, -5.0), "FPV", 8, COLOR_FLIGHT_PATH)
 
 
 func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, yaw_input: float) -> void:
@@ -353,7 +375,7 @@ func _draw_bottom_guidance(font: Font) -> void:
 	_draw_text(
 		font,
 		Vector2(350.0, 711.0),
-		"F FIELD   W/S POWER   Q/E VECTOR   MOUSE P/R   A/D RUDDER   V FCC   C VIEW   RMB LOOK   F3 DEBUG   F10 DISPLAY",
+		"F FIELD   W/S THROTTLE   Q/E VECTOR   MOUSE P/R   A/D RUDDER   V FCC   C VIEW   RMB LOOK   F3 DEBUG   F10 DISPLAY",
 		9,
 		COLOR_DIM,
 		HORIZONTAL_ALIGNMENT_CENTER,

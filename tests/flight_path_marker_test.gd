@@ -24,6 +24,14 @@ func _run_tests() -> void:
 	var aligned_position: Vector2 = aligned.get("position", Vector2.ZERO)
 	_expect_near_vector(aligned_position, CENTER, EPSILON, "Aligned velocity places the marker on the nose reference")
 
+	# The active camera basis, not the ship body forward axis, is the projection reference.
+	var yawed_view_basis := Basis(Vector3.UP, deg_to_rad(90.0))
+	var camera_aligned: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
+		Vector3(-30.0, 0.0, 0.0), yawed_view_basis, CENTER
+	)
+	_expect(bool(camera_aligned.get("visible", false)), "World velocity remains visible after camera-look rotation")
+	_expect_near_vector(Vector2(camera_aligned.get("position", Vector2.ZERO)), CENTER, EPSILON, "Flight-path vector is projected relative to the active view")
+
 	var right_drift: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
 		Vector3(8.0, 0.0, -30.0), Basis.IDENTITY, CENTER
 	)

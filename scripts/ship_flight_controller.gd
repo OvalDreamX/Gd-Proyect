@@ -259,7 +259,6 @@ func _physics_process(delta: float) -> void:
 
 	var control_available: bool = (
 		_field_state == FieldState.ONLINE
-		and _field_power_output > 0.0001
 		and not _ship.freeze
 	)
 	_update_fcc_snapshot(control_available)
@@ -272,7 +271,9 @@ func _physics_process(delta: float) -> void:
 		_vector_distribution_actual_degrees,
 		float(_fcc_snapshot.get("fcc_pitch_output", 0.0)),
 		float(_fcc_snapshot.get("fcc_roll_output", 0.0)),
-		float(_fcc_snapshot.get("fcc_yaw_output", 0.0))
+		float(_fcc_snapshot.get("fcc_yaw_output", 0.0)),
+		float(_fcc_snapshot.get("fcc_vane_redistribution_fraction", 0.0)),
+		float(_fcc_snapshot.get("fcc_maximum_vane_output_multiplier", 1.2))
 	)
 
 	if telemetry_changed:
@@ -436,6 +437,8 @@ func _publish_telemetry() -> void:
 		"ship_linear_velocity": _ship.linear_velocity,
 		"ship_angular_velocity": _ship.angular_velocity,
 		"ship_global_basis": _ship.global_basis,
+		"view_camera_global_basis": _camera_controller.get_active_camera_global_basis(),
+		"ship_gravity_world": _ship.get_gravity(),
 		"ship_is_sleeping": _ship.sleeping,
 		"center_of_mass_mode": "AUTO" if _ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO else "CUSTOM",
 		"rigid_body_frozen": _ship.freeze,

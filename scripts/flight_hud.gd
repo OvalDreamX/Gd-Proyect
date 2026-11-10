@@ -125,6 +125,13 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
 	var position: Vector3 = telemetry.get("ship_position", Vector3.ZERO)
 	var velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO)
+	var local_up_world: Vector3 = telemetry.get("atmosphere_up_world", Vector3.UP)
+	if local_up_world.length_squared() <= 0.000001:
+		local_up_world = Vector3.UP
+	else:
+		local_up_world = local_up_world.normalized()
+	var local_vertical_speed: float = velocity.dot(local_up_world)
+	var local_altitude: float = float(telemetry.get("atmosphere_altitude_m", position.y))
 	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
 	var basis: Basis = telemetry.get("ship_global_basis", Basis.IDENTITY)
 	basis = basis.orthonormalized()
@@ -189,15 +196,16 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 
 	var lines: PackedStringArray = PackedStringArray()
 	lines.append("[ PILOT / VIEW ]")
-	lines.append("Field state: %s | Power setpoint/output: %.1f%% / %.1f%% | Vector setpoint/output: %.1f° / %.1f°" % [field_state, power_command * 100.0, power_output * 100.0, vector_command, vector_actual])
+	lines.append("Field state: %s | Main-vector throttle setpoint/output: %.1f%% / %.1f%% | Vector setpoint/output: %.1f° / %.1f°" % [field_state, power_command * 100.0, power_output * 100.0, vector_command, vector_actual])
 	lines.append("Pilot commands: pitch %.3f | roll %.3f | yaw %.3f | Controls armed: %s" % [pitch_command, roll_command, yaw_command, str(bool(telemetry.get("controls_armed", false)))])
 	lines.append("Camera: %s | Camera look yaw/pitch: %+.2f° / %+.2f° | Input mode: %s | Debug UI interaction: %s" % [camera_view, camera_yaw, camera_pitch, input_mode, str(bool(telemetry.get("debug_interaction_mode", false)))])
 	lines.append("FCC: %s | Control available: %s | Output P/R/Y: %+.3f / %+.3f / %+.3f" % ["ASSISTED RATE CONTROL" if bool(telemetry.get("fcc_assistance_enabled", true)) else "DIRECT VANES", str(bool(telemetry.get("fcc_control_available", false))), fcc_output.x, fcc_output.z, fcc_output.y])
 	lines.append("Input shaping: deadzone %.1f%% | curve %.0f%% | conditioned P/R/Y: %+.3f / %+.3f / %+.3f" % [fcc_input_deadzone * 100.0, fcc_input_curvature * 100.0, fcc_pitch_conditioned, fcc_roll_conditioned, fcc_yaw_conditioned])
+	lines.append("Vane redistribution: %.0f%% of deficit | healthy-vane cap: %.2fx nominal" % [float(telemetry.get("fcc_vane_redistribution_fraction", 0.0)) * 100.0, float(telemetry.get("fcc_maximum_vane_output_multiplier", 1.0))])
 	lines.append("")
 	lines.append("[ FLIGHT STATE ]")
-	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, position.y])
-	lines.append("Velocity: (%.3f, %.3f, %.3f) m/s | Speed: %.3f m/s | Vertical speed: %+.3f m/s" % [velocity.x, velocity.y, velocity.z, velocity.length(), velocity.y])
+	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, local_altitude])
+	lines.append("Velocity: (%.3f, %.3f, %.3f) m/s | Ground speed: %.3f m/s | Local vertical speed: %+.3f m/s" % [velocity.x, velocity.y, velocity.z, velocity.length(), local_vertical_speed])
 	lines.append("Attitude: pitch %+.2f° | roll %+.2f° | heading %03.0f°" % [pitch_attitude, roll_attitude, heading])
 	lines.append("Angular velocity world: (%.4f, %.4f, %.4f) rad/s | Magnitude: %.4f rad/s" % [angular_velocity.x, angular_velocity.y, angular_velocity.z, angular_velocity.length()])
 	lines.append("Rigid body frozen: %s | Sleeping: %s | COM mode: %s | Physics output connected: %s" % [str(bool(telemetry.get("rigid_body_frozen", false))), str(bool(telemetry.get("ship_is_sleeping", false))), str(telemetry.get("center_of_mass_mode", "AUTO")), str(bool(telemetry.get("physics_output_connected", false)))])
@@ -213,7 +221,7 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Main vector world: (%.3f, %.3f, %.3f) | Applied torque: (%.2f, %.2f, %.2f) N·m" % [main_direction.x, main_direction.y, main_direction.z, net_torque.x, net_torque.y, net_torque.z])
 	lines.append("Main vector convention: 0° forward (-Z) | 90° ship-up (+Y) | 110° up/rearward blend")
 	lines.append("Vertical TWR: %.3f / %.3f | Gravity: %.3f m/s² | Hover threshold: %s" % [actual_twr, maximum_twr, gravity, hover_threshold_text])
-	lines.append("Maneuver authority fraction: %.4f | Reference gravity: %.3f m/s²" % [float(telemetry.get("maneuver_authority_fraction", 0.0)), float(telemetry.get("reference_gravity_mps2", 9.81))])
+	lines.append("Maneuver authority: %.4f | Power multiplier: %.2fx | Idle reserve: %.0f%% | Reference gravity: %.3f m/s²" % [float(telemetry.get("maneuver_authority_fraction", 0.0)), float(telemetry.get("maneuver_power_multiplier", 0.0)), float(telemetry.get("maneuver_boost_at_zero_main_power", 0.0)) * 100.0, float(telemetry.get("reference_gravity_mps2", 9.81))])
 	lines.append("")
 	lines.append("[ ATMOSPHERE / DRAG ]")
 	lines.append("Atmosphere enabled: %s | Local altitude above reference: %.2f m | Density: %.6f kg/m³" % [str(atmosphere_enabled), atmosphere_altitude, atmosphere_density])
@@ -242,7 +250,7 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 		var contribution: Dictionary = contribution_value
 		var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
 		var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
-		lines.append("%s | F=(%.1f, %.1f, %.1f) N | M=(%.2f, %.2f, %.2f) N·m | point=%s" % [str(contribution.get("vane_id", "UNKNOWN")), vane_force.x, vane_force.y, vane_force.z, vane_torque.x, vane_torque.y, vane_torque.z, str(contribution.get("application_point_world", Vector3.ZERO))])
+		lines.append("%s | F=(%.1f, %.1f, %.1f) N | M=(%.2f, %.2f, %.2f) N·m | base=%.3f TWR | redistributed=%.3f TWR | point=%s" % [str(contribution.get("vane_id", "UNKNOWN")), vane_force.x, vane_force.y, vane_force.z, vane_torque.x, vane_torque.y, vane_torque.z, float(contribution.get("base_effective_authority_twr", contribution.get("effective_authority_twr", 0.0))), float(contribution.get("redistributed_authority_twr", 0.0)), str(contribution.get("application_point_world", Vector3.ZERO))])
 	lines.append("")
 	lines.append("[ APPLIED RESULTANT VECTORS ]")
 	if force_vectors.is_empty():

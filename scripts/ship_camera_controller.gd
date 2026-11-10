@@ -167,6 +167,13 @@ func get_view_name() -> String:
 	return "EXTERNAL" if _using_external_view else "COCKPIT"
 
 
+## Basis of the camera currently rendering the world. HUD world cues use this
+## instead of assuming the pilot is always looking straight down the nose.
+func get_active_camera_global_basis() -> Basis:
+	var active_camera: Camera3D = _external_camera if _using_external_view else _cockpit_camera
+	return active_camera.global_basis.orthonormalized()
+
+
 func get_look_angles_degrees() -> Vector2:
 	if _using_external_view:
 		return Vector2(rad_to_deg(_external_yaw_radians), rad_to_deg(_external_pitch_radians))

@@ -16,6 +16,9 @@ class_name RepulsorliftSystem
 ## Fraction of each bottom vane's rated authority reserved for each commanded
 ## pitch/roll vector pair. This is a PLACEHOLDER for first control-feel tuning.
 @export_range(0.0, 0.25, 0.005) var maneuver_authority_fraction: float = 0.05
+## Maneuvering keeps a baseline while the field is online. Unused main-vector
+## allocation can add up to this modest reserve at zero main-vector output.
+@export_range(0.0, 0.35, 0.01) var maneuver_boost_at_zero_main_power: float = 0.20
 
 @export_category("Debug vectors")
 @export_range(1.0, 12.0, 0.5) var debug_arrow_length_per_twr_m: float = 4.0
@@ -52,6 +55,9 @@ var _debug_visualization_enabled: bool = false
 var _debug_refresh_counter: int = 0
 var _last_field_online: bool = false
 var _last_power_output: float = 0.0
+var _last_maneuver_power_multiplier: float = 0.0
+var _last_vane_redistribution_fraction: float = 0.0
+var _last_maximum_vane_output_multiplier: float = 1.2
 var _last_vector_angle_degrees: float = 90.0
 var _last_pitch_command: float = 0.0
 var _last_roll_command: float = 0.0
@@ -99,13 +105,15 @@ func apply_flight_control_forces(
 		vector_angle_degrees: float,
 		pitch_command: float,
 		roll_command: float,
-		yaw_command: float
+		yaw_command: float,
+		vane_redistribution_fraction: float = 0.0,
+		maximum_vane_output_multiplier: float = 1.2
 ) -> void:
 	_reset_frame_output(field_online, power_output, vector_angle_degrees, pitch_command, roll_command, yaw_command)
 
 	if not is_instance_valid(_ship) or not is_instance_valid(_vane_controller):
 		return
-	if _ship.freeze or not field_online or _last_power_output <= 0.0:
+	if _ship.freeze or not field_online:
 		_update_force_debug()
 		return
 	if _ship.mass <= MINIMUM_MASS_KG or not _vane_controller.is_configuration_valid():
@@ -115,12 +123,19 @@ func apply_flight_control_forces(
 	var body_basis: Basis = _ship.global_basis.orthonormalized()
 	var center_of_mass_world: Vector3 = _ship.global_transform * _ship.center_of_mass
 	_last_gravity_magnitude = _ship.get_gravity().length()
-	var force_newtons_per_twr: float = _ship.mass * reference_gravity_mps2 * _last_power_output
+	var reference_force_newtons_per_twr: float = _ship.mass * reference_gravity_mps2
+	var main_vector_force_scale: float = reference_force_newtons_per_twr * _last_power_output
+	# Maneuvering remains available whenever the field is ONLINE. Reducing the
+	# main-vector allocation releases a small amount of capacity to the vanes.
+	_last_maneuver_power_multiplier = 1.0 + (1.0 - _last_power_output) * clampf(maneuver_boost_at_zero_main_power, 0.0, 0.35)
+	_last_vane_redistribution_fraction = clampf(vane_redistribution_fraction, 0.0, 1.0)
+	_last_maximum_vane_output_multiplier = clampf(maximum_vane_output_multiplier, 1.0, 1.5)
+	var maneuver_force_scale: float = reference_force_newtons_per_twr * _last_maneuver_power_multiplier
 
-	_apply_main_vector(body_basis, center_of_mass_world, force_newtons_per_twr)
-	_apply_pitch_pair(body_basis, force_newtons_per_twr)
-	_apply_roll_pair(body_basis, force_newtons_per_twr)
-	_apply_yaw_pair(body_basis, force_newtons_per_twr)
+	_apply_main_vector(body_basis, center_of_mass_world, main_vector_force_scale)
+	_apply_pitch_pair(body_basis, maneuver_force_scale, _last_vane_redistribution_fraction, _last_maximum_vane_output_multiplier)
+	_apply_roll_pair(body_basis, maneuver_force_scale, _last_vane_redistribution_fraction, _last_maximum_vane_output_multiplier)
+	_apply_yaw_pair(body_basis, maneuver_force_scale, _last_vane_redistribution_fraction, _last_maximum_vane_output_multiplier)
 
 	if _last_gravity_magnitude > 0.0001:
 		var local_up: Vector3 = -_ship.get_gravity().normalized()
@@ -139,6 +154,9 @@ func _reset_frame_output(
 ) -> void:
 	_last_field_online = field_online
 	_last_power_output = clampf(power_output, 0.0, 1.0) if field_online else 0.0
+	_last_maneuver_power_multiplier = 1.0 if field_online else 0.0
+	_last_vane_redistribution_fraction = 0.0
+	_last_maximum_vane_output_multiplier = 1.2
 	_last_vector_angle_degrees = clampf(vector_angle_degrees, 0.0, 110.0)
 	_last_pitch_command = clampf(pitch_command, -1.0, 1.0) if field_online else 0.0
 	_last_roll_command = clampf(roll_command, -1.0, 1.0) if field_online else 0.0
@@ -182,7 +200,7 @@ func _apply_main_vector(body_basis: Basis, center_of_mass_world: Vector3, force_
 	})
 
 
-func _apply_pitch_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
+func _apply_pitch_pair(body_basis: Basis, force_newtons_per_twr: float, redistribution_fraction: float, maximum_output_multiplier: float) -> void:
 	if absf(_last_pitch_command) <= 0.0001:
 		return
 	var force_scale: float = force_newtons_per_twr * maneuver_authority_fraction * absf(_last_pitch_command)
@@ -194,18 +212,22 @@ func _apply_pitch_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
 		"pitch",
 		FRONT_VANE_IDS,
 		nose_direction,
-		force_scale
+		force_scale,
+		redistribution_fraction,
+		maximum_output_multiplier
 	)
 	_apply_vane_set_force(
 		"PITCH REAR",
 		"pitch",
 		REAR_VANE_IDS,
 		rear_direction,
-		force_scale
+		force_scale,
+		redistribution_fraction,
+		maximum_output_multiplier
 	)
 
 
-func _apply_roll_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
+func _apply_roll_pair(body_basis: Basis, force_newtons_per_twr: float, redistribution_fraction: float, maximum_output_multiplier: float) -> void:
 	if absf(_last_roll_command) <= 0.0001:
 		return
 	var force_scale: float = force_newtons_per_twr * maneuver_authority_fraction * absf(_last_roll_command)
@@ -213,11 +235,11 @@ func _apply_roll_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
 	var left_direction: Vector3 = body_basis * Vector3.UP * signf(_last_roll_command)
 	var right_direction: Vector3 = -left_direction
 
-	_apply_vane_set_force("ROLL LEFT", "roll", LEFT_VANE_IDS, left_direction, force_scale)
-	_apply_vane_set_force("ROLL RIGHT", "roll", RIGHT_VANE_IDS, right_direction, force_scale)
+	_apply_vane_set_force("ROLL LEFT", "roll", LEFT_VANE_IDS, left_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
+	_apply_vane_set_force("ROLL RIGHT", "roll", RIGHT_VANE_IDS, right_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
 
 
-func _apply_yaw_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
+func _apply_yaw_pair(body_basis: Basis, force_newtons_per_twr: float, redistribution_fraction: float, maximum_output_multiplier: float) -> void:
 	if absf(_last_yaw_command) <= 0.0001:
 		return
 	var force_scale: float = force_newtons_per_twr * absf(_last_yaw_command)
@@ -227,8 +249,8 @@ func _apply_yaw_pair(body_basis: Basis, force_newtons_per_twr: float) -> void:
 	var left_direction: Vector3 = body_basis * Vector3.FORWARD * signf(_last_yaw_command)
 	var right_direction: Vector3 = -left_direction
 
-	_apply_group_force("YAW LEFT", "yaw", SIDE_LEFT_GROUP, left_direction, force_scale)
-	_apply_group_force("YAW RIGHT", "yaw", SIDE_RIGHT_GROUP, right_direction, force_scale)
+	_apply_group_force("YAW LEFT", "yaw", SIDE_LEFT_GROUP, left_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
+	_apply_group_force("YAW RIGHT", "yaw", SIDE_RIGHT_GROUP, right_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
 
 
 func _apply_vane_set_force(
@@ -236,14 +258,18 @@ func _apply_vane_set_force(
 		force_kind: String,
 		vane_ids: Array[StringName],
 		force_direction_world: Vector3,
-		force_scale: float
+		force_scale: float,
+		redistribution_fraction: float,
+		maximum_output_multiplier: float
 ) -> void:
 	var resultant: Dictionary = _vane_controller.calculate_vane_set_resultant(
 		vane_ids,
 		force_direction_world,
 		force_scale,
 		_ship.global_transform,
-		_ship.center_of_mass
+		_ship.center_of_mass,
+		redistribution_fraction,
+		maximum_output_multiplier
 	)
 	_apply_resultant(force_name, force_kind, resultant)
 
@@ -253,14 +279,18 @@ func _apply_group_force(
 		force_kind: String,
 		group_id: StringName,
 		force_direction_world: Vector3,
-		force_scale: float
+		force_scale: float,
+		redistribution_fraction: float,
+		maximum_output_multiplier: float
 ) -> void:
 	var resultant: Dictionary = _vane_controller.calculate_group_resultant(
 		group_id,
 		force_direction_world,
 		force_scale,
 		_ship.global_transform,
-		_ship.center_of_mass
+		_ship.center_of_mass,
+		redistribution_fraction,
+		maximum_output_multiplier
 	)
 	_apply_resultant(force_name, force_kind, resultant)
 
@@ -369,6 +399,10 @@ func get_telemetry() -> Dictionary:
 		"lift_force_vectors": _last_force_vectors.duplicate(true),
 		"lift_vane_contributions": _last_vane_contributions.duplicate(true),
 		"maneuver_authority_fraction": maneuver_authority_fraction,
+		"maneuver_power_multiplier": _last_maneuver_power_multiplier,
+		"maneuver_boost_at_zero_main_power": maneuver_boost_at_zero_main_power,
+		"vane_redistribution_fraction": _last_vane_redistribution_fraction,
+		"maximum_vane_output_multiplier": _last_maximum_vane_output_multiplier,
 		"reference_gravity_mps2": reference_gravity_mps2,
 	}
 	telemetry.merge(vane_telemetry, true)

@@ -130,14 +130,18 @@ func calculate_group_resultant(
 		force_direction_world: Vector3,
 		force_newtons_per_twr: float,
 		ship_global_transform: Transform3D,
-		center_of_mass_local: Vector3
+		center_of_mass_local: Vector3,
+		redistribution_fraction: float = 0.0,
+		maximum_output_multiplier: float = 1.2
 ) -> Dictionary:
 	return calculate_vane_set_resultant(
 		get_vane_ids_for_group(group_id),
 		force_direction_world,
 		force_newtons_per_twr,
 		ship_global_transform,
-		center_of_mass_local
+		center_of_mass_local,
+		redistribution_fraction,
+		maximum_output_multiplier
 	)
 
 
@@ -150,7 +154,9 @@ func calculate_vane_set_resultant(
 		force_direction_world: Vector3,
 		force_newtons_per_twr: float,
 		ship_global_transform: Transform3D,
-		center_of_mass_local: Vector3
+		center_of_mass_local: Vector3,
+		redistribution_fraction: float = 0.0,
+		maximum_output_multiplier: float = 1.2
 ) -> Dictionary:
 	var net_force: Vector3 = Vector3.ZERO
 	var net_torque: Vector3 = Vector3.ZERO
@@ -160,6 +166,9 @@ func calculate_vane_set_resultant(
 	var nominal_authority_twr: float = 0.0
 	var effective_authority_twr: float = 0.0
 	var seen_ids: Dictionary = {}
+	var valid_vanes: Array[Dictionary] = []
+	var total_damage_shortfall_twr: float = 0.0
+	var total_healthy_headroom_twr: float = 0.0
 
 	var body_basis: Basis = ship_global_transform.basis.orthonormalized()
 	var body_origin: Vector3 = ship_global_transform.origin
@@ -173,18 +182,48 @@ func calculate_vane_set_resultant(
 
 	var local_reference_direction: Vector3 = body_basis.inverse() * force_direction_world.normalized()
 	var non_negative_force_scale: float = maxf(force_newtons_per_twr, 0.0)
+	var safe_redistribution_fraction: float = clampf(redistribution_fraction, 0.0, 1.0)
+	var safe_maximum_multiplier: float = clampf(maximum_output_multiplier, 1.0, 1.5)
 
+	# First measure the group's damage deficit and spare capacity. Only healthy,
+	# non-failed vanes can receive redistributed output; damaged vanes are not
+	# allowed to hide their own condition by amplifying themselves.
 	for vane_id in vane_ids:
 		if seen_ids.has(vane_id) or not _definitions_by_id.has(vane_id):
 			continue
 		seen_ids[vane_id] = true
-
 		var definition := _definitions_by_id[vane_id] as VaneDefinition
 		if not definition.enabled:
 			continue
 		var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
-		var authority_multiplier: float = state.authority_multiplier()
-		var effective_vane_twr: float = definition.nominal_authority_twr * authority_multiplier
+		var base_authority: float = definition.nominal_authority_twr * state.authority_multiplier()
+		var spare_headroom: float = 0.0
+		if not state.failed and state.integrity >= 0.999:
+			spare_headroom = definition.nominal_authority_twr * (safe_maximum_multiplier - 1.0)
+		total_damage_shortfall_twr += maxf(definition.nominal_authority_twr - base_authority, 0.0)
+		total_healthy_headroom_twr += spare_headroom
+		valid_vanes.append({
+			"definition": definition,
+			"state": state,
+			"base_authority_twr": base_authority,
+			"spare_headroom_twr": spare_headroom,
+		})
+
+	var redistribution_budget_twr: float = minf(
+		total_damage_shortfall_twr * safe_redistribution_fraction,
+		total_healthy_headroom_twr
+	)
+
+	for vane_entry_value in valid_vanes:
+		var vane_entry: Dictionary = vane_entry_value
+		var definition := vane_entry["definition"] as VaneDefinition
+		var state := vane_entry["state"] as VaneRuntimeState
+		var base_authority: float = float(vane_entry["base_authority_twr"])
+		var spare_headroom: float = float(vane_entry["spare_headroom_twr"])
+		var redistributed_authority: float = 0.0
+		if total_healthy_headroom_twr > MINIMUM_FORCE_WEIGHT and spare_headroom > 0.0:
+			redistributed_authority = redistribution_budget_twr * spare_headroom / total_healthy_headroom_twr
+		var effective_vane_twr: float = base_authority + redistributed_authority
 		var alignment_radians: Vector3 = state.alignment_offset_degrees * ALIGNMENT_DEGREES_TO_RADIANS
 		var alignment_basis := Basis.from_euler(alignment_radians)
 		var vane_direction_world: Vector3 = (
@@ -212,6 +251,8 @@ func calculate_vane_set_resultant(
 			"integrity": state.integrity,
 			"failed": state.failed,
 			"effective_authority_twr": effective_vane_twr,
+			"base_effective_authority_twr": base_authority,
+			"redistributed_authority_twr": redistributed_authority,
 			"force_world": vane_force,
 			"torque_world": vane_torque,
 			"application_point_world": application_point_world,
