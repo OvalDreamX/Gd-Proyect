@@ -1,8 +1,9 @@
 extends Node
 class_name VaneController
 
-## Owns immutable vane definitions and per-ship runtime condition.
-## Calculates group force/torque resultants but never applies them to physics.
+## Owns shared vane definitions and per-ship runtime condition.
+## This script calculates group resultants and weighted application points;
+## it never applies forces to the ship itself.
 
 class VaneRuntimeState:
 	extends RefCounted
@@ -20,11 +21,12 @@ class VaneRuntimeState:
 
 
 @export_category("Vane configuration")
-## Resource definitions may be shared; runtime state below is always per instance.
+## Resources are configuration only. Runtime state is always local to this ship.
 @export var vane_definitions: Array[Resource] = []
 
 const MINIMUM_GROUP_AUTHORITY: float = 0.000001
 const ALIGNMENT_DEGREES_TO_RADIANS: float = PI / 180.0
+const MINIMUM_FORCE_WEIGHT: float = 0.000001
 
 var _definitions_by_id: Dictionary = {}
 var _runtime_states_by_id: Dictionary = {}
@@ -33,13 +35,10 @@ var _configuration_valid: bool = false
 
 
 func _enter_tree() -> void:
-	# Definitions are already deserialized when the node enters the tree.
-	# Build here so sibling systems can safely query us from their _ready().
 	_rebuild_runtime_states()
 
 
-## Rebuilds this ship's runtime state from the configured Resources.
-## Does not modify the Resources themselves.
+## Builds per-instance state without modifying the shared Resource definitions.
 func _rebuild_runtime_states() -> void:
 	_definitions_by_id.clear()
 	_runtime_states_by_id.clear()
@@ -95,6 +94,15 @@ func get_configuration_errors() -> PackedStringArray:
 	return _configuration_errors.duplicate()
 
 
+func get_vane_ids_for_group(group_id: StringName) -> Array[StringName]:
+	var result: Array[StringName] = []
+	for vane_id in _definitions_by_id:
+		var definition := _definitions_by_id[vane_id] as VaneDefinition
+		if definition.enabled and definition.group_id == group_id:
+			result.append(vane_id)
+	return result
+
+
 func get_group_nominal_authority_twr(group_id: StringName) -> float:
 	var total_authority: float = 0.0
 	for vane_id in _definitions_by_id:
@@ -104,12 +112,41 @@ func get_group_nominal_authority_twr(group_id: StringName) -> float:
 	return total_authority
 
 
-## Calculate a group's resultant from its individual vane contributions.
-## force_newtons_per_twr is normally ship_mass * gravity_magnitude * field_output.
-## Force direction is supplied by the caller; alignment offsets rotate it in the
-## ship's local frame. No physics API is called here.
+## Effective authority includes disabled/failing/partially damaged runtime state.
+func get_group_effective_authority_twr(group_id: StringName) -> float:
+	var total_authority: float = 0.0
+	for vane_id in _definitions_by_id:
+		var definition := _definitions_by_id[vane_id] as VaneDefinition
+		if not definition.enabled or definition.group_id != group_id:
+			continue
+		var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+		total_authority += definition.nominal_authority_twr * state.authority_multiplier()
+	return total_authority
+
+
+## Convenience wrapper: calculate all enabled vanes belonging to one logical group.
 func calculate_group_resultant(
 		group_id: StringName,
+		force_direction_world: Vector3,
+		force_newtons_per_twr: float,
+		ship_global_transform: Transform3D,
+		center_of_mass_local: Vector3
+) -> Dictionary:
+	return calculate_vane_set_resultant(
+		get_vane_ids_for_group(group_id),
+		force_direction_world,
+		force_newtons_per_twr,
+		ship_global_transform,
+		center_of_mass_local
+	)
+
+
+## Calculate a resultant for an arbitrary set of vane IDs.
+## The returned application point is the force-magnitude-weighted centroid. For
+## a group whose vanes share a direction, applying net_force at this point
+## reproduces the sum of the individual vane moments exactly.
+func calculate_vane_set_resultant(
+		vane_ids: Array[StringName],
 		force_direction_world: Vector3,
 		force_newtons_per_twr: float,
 		ship_global_transform: Transform3D,
@@ -118,66 +155,94 @@ func calculate_group_resultant(
 	var net_force: Vector3 = Vector3.ZERO
 	var net_torque: Vector3 = Vector3.ZERO
 	var contributions: Array[Dictionary] = []
-
-	var group_authority_twr: float = get_group_nominal_authority_twr(group_id)
-	if group_authority_twr <= MINIMUM_GROUP_AUTHORITY:
-		return _make_resultant(net_force, net_torque, contributions, group_authority_twr)
-	if force_direction_world.length_squared() <= MINIMUM_GROUP_AUTHORITY:
-		return _make_resultant(net_force, net_torque, contributions, group_authority_twr)
+	var weighted_application_point: Vector3 = Vector3.ZERO
+	var total_force_weight: float = 0.0
+	var nominal_authority_twr: float = 0.0
+	var effective_authority_twr: float = 0.0
+	var seen_ids: Dictionary = {}
 
 	var body_basis: Basis = ship_global_transform.basis.orthonormalized()
+	var body_origin: Vector3 = ship_global_transform.origin
+	var center_of_mass_world: Vector3 = body_origin + body_basis * center_of_mass_local
+
+	if force_direction_world.length_squared() <= MINIMUM_GROUP_AUTHORITY:
+		return _make_resultant(
+			net_force, net_torque, contributions, nominal_authority_twr,
+			effective_authority_twr, center_of_mass_world
+		)
+
 	var local_reference_direction: Vector3 = body_basis.inverse() * force_direction_world.normalized()
+	var non_negative_force_scale: float = maxf(force_newtons_per_twr, 0.0)
 
-	for vane_id in _definitions_by_id:
-		var definition := _definitions_by_id[vane_id] as VaneDefinition
-		if not definition.enabled or definition.group_id != group_id:
+	for vane_id in vane_ids:
+		if seen_ids.has(vane_id) or not _definitions_by_id.has(vane_id):
 			continue
+		seen_ids[vane_id] = true
 
+		var definition := _definitions_by_id[vane_id] as VaneDefinition
+		if not definition.enabled:
+			continue
 		var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
 		var authority_multiplier: float = state.authority_multiplier()
+		var effective_vane_twr: float = definition.nominal_authority_twr * authority_multiplier
 		var alignment_radians: Vector3 = state.alignment_offset_degrees * ALIGNMENT_DEGREES_TO_RADIANS
 		var alignment_basis := Basis.from_euler(alignment_radians)
 		var vane_direction_world: Vector3 = (
 			body_basis * alignment_basis * local_reference_direction
 		).normalized()
 
-		var effective_authority_twr: float = definition.nominal_authority_twr * authority_multiplier
-		var force_magnitude: float = maxf(force_newtons_per_twr, 0.0) * effective_authority_twr
+		var force_magnitude: float = non_negative_force_scale * effective_vane_twr
 		var vane_force: Vector3 = vane_direction_world * force_magnitude
-
-		# Vane positions and center of mass are both ship-local. Transform only
-		# the lever arm to world space; cross products are then in world space.
-		var lever_arm_world: Vector3 = body_basis * (definition.local_position - center_of_mass_local)
+		var application_point_world: Vector3 = body_origin + body_basis * definition.local_position
+		var lever_arm_world: Vector3 = application_point_world - center_of_mass_world
 		var vane_torque: Vector3 = lever_arm_world.cross(vane_force)
 
+		nominal_authority_twr += definition.nominal_authority_twr
+		effective_authority_twr += effective_vane_twr
 		net_force += vane_force
 		net_torque += vane_torque
+		if force_magnitude > MINIMUM_FORCE_WEIGHT:
+			weighted_application_point += application_point_world * force_magnitude
+			total_force_weight += force_magnitude
+
 		contributions.append({
 			"vane_id": definition.vane_id,
 			"display_name": definition.display_name,
 			"group_id": definition.group_id,
 			"integrity": state.integrity,
 			"failed": state.failed,
-			"effective_authority_twr": effective_authority_twr,
+			"effective_authority_twr": effective_vane_twr,
 			"force_world": vane_force,
 			"torque_world": vane_torque,
+			"application_point_world": application_point_world,
 			"lever_arm_world": lever_arm_world,
 		})
 
-	return _make_resultant(net_force, net_torque, contributions, group_authority_twr)
+	var effective_application_point_world: Vector3 = center_of_mass_world
+	if total_force_weight > MINIMUM_FORCE_WEIGHT:
+		effective_application_point_world = weighted_application_point / total_force_weight
+
+	return _make_resultant(
+		net_force, net_torque, contributions, nominal_authority_twr,
+		effective_authority_twr, effective_application_point_world
+	)
 
 
 func _make_resultant(
 		net_force: Vector3,
 		net_torque: Vector3,
 		contributions: Array[Dictionary],
-		group_authority_twr: float
+		nominal_authority_twr: float,
+		effective_authority_twr: float,
+		effective_application_point_world: Vector3
 ) -> Dictionary:
 	return {
 		"net_force": net_force,
 		"net_torque": net_torque,
 		"contributions": contributions,
-		"nominal_authority_twr": group_authority_twr,
+		"nominal_authority_twr": nominal_authority_twr,
+		"effective_authority_twr": effective_authority_twr,
+		"effective_application_point_world": effective_application_point_world,
 	}
 
 
@@ -221,6 +286,7 @@ func get_telemetry() -> Dictionary:
 			"display_name": definition.display_name,
 			"group_id": definition.group_id,
 			"enabled": definition.enabled,
+			"local_position": definition.local_position,
 			"nominal_authority_twr": definition.nominal_authority_twr,
 			"effective_authority_twr": definition.nominal_authority_twr * state.authority_multiplier(),
 			"integrity": state.integrity,

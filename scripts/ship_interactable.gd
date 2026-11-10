@@ -1,7 +1,12 @@
 extends RigidBody3D
 class_name ShipInteractable
 ## Physics-enabled placeholder freighter. The single rigid-body root is retained
-## for all future force-based flight simulation.
+## for all flight forces, moments, collision response, and future cargo changes.
+
+@export_category("Prototype rotational damping")
+## Passive angular-rate damping only; this is not the FCC or attitude hold.
+## It prevents a small input from producing an indefinitely undamped spin.
+@export_range(0.0, 5.0, 0.1) var prototype_angular_damping: float = 1.5
 
 @onready var pilot_zone: Area3D = $PilotZone
 @onready var seat_anchor: Marker3D = $CockpitSeat
@@ -14,11 +19,13 @@ var _active_pilot: Node = null
 
 
 func _ready() -> void:
-	# GDD Prototype Step 1: use Godot's normal rigid-body integration. Allow the
-	# body to settle and sleep naturally when no forces or collisions disturb it.
+	# Use Godot's normal rigid-body integration. Keep linear inertia intact,
+	# while applying modest passive damping to angular velocity until the FCC
+	# rate controller is implemented and tuned in its own milestone.
 	freeze = false
 	can_sleep = true
 	sleeping = false
+	angular_damp = prototype_angular_damping
 	pilot_zone.body_entered.connect(_on_pilot_zone_body_entered)
 	pilot_zone.body_exited.connect(_on_pilot_zone_body_exited)
 
@@ -31,8 +38,6 @@ func request_pilot(player: Node) -> void:
 	if not player.has_method("enter_pilot_seat") or not player.has_method("is_piloting"):
 		return
 
-	# Claim the seat only if the player controller actually accepted the
-	# transition. This prevents a rejected/busy player from locking the ship.
 	var entry_accepted: bool = bool(
 		player.call("enter_pilot_seat", seat_anchor, cockpit_camera, hull_visual, cockpit_interior)
 	)
@@ -45,9 +50,7 @@ func request_pilot(player: Node) -> void:
 		player.clear_nearby_ship(self)
 
 
-## True only after the player has claimed the seat and the entry transition has
-## fully completed. This queries pilot occupancy, not the active camera:
-## cockpit/external camera switching must not change ship-system ownership.
+## Camera selection is deliberately not used as a pilot-occupancy test.
 func is_pilot_ready() -> bool:
 	return (
 		_pilot_claimed

@@ -28,7 +28,7 @@ var _lift_force_label: Label
 var _lift_twr_label: Label
 var _hover_power_label: Label
 var _vane_status_label: Label
-var _predicted_torque_label: Label
+var _torque_output_label: Label
 var _instruction_label: Label
 var _debug_overview_panel: PanelContainer
 var _debug_overview_label: Label
@@ -72,7 +72,9 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var hover_power_percent: float = float(telemetry.get("lift_hover_power_percent", -1.0))
 	var gravity_magnitude: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
 	var field_online: bool = bool(telemetry.get("lift_field_online", false))
-	var predicted_torque: Vector3 = telemetry.get("lift_predicted_torque_vector", Vector3.ZERO)
+	var main_direction_world: Vector3 = telemetry.get("lift_main_direction_world", Vector3.UP)
+	var applied_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
+	var torque_applied: bool = bool(telemetry.get("lift_torque_applied", false))
 	var vane_count: int = int(telemetry.get("vane_count", 0))
 	var vane_healthy_count: int = int(telemetry.get("vane_healthy_count", 0))
 	var vane_configuration_valid: bool = bool(telemetry.get("vane_configuration_valid", false))
@@ -90,7 +92,7 @@ func update_telemetry(telemetry: Dictionary) -> void:
 		"ONLINE":
 			_field_state_label.add_theme_color_override("font_color", COLOR_ONLINE)
 			if bool(telemetry.get("controls_armed", true)):
-				_instruction_label.text = "FIELD ONLINE  |  FRONT/REAR VANE RESULTANTS CALCULATED"
+				_instruction_label.text = "FIELD ONLINE  |  Q/E VECTOR + PITCH / ROLL / YAW FORCE PAIRS ACTIVE"
 			else:
 				_instruction_label.text = "RELEASE W/S, Q/E AND A/D TO ARM THE COMMAND INPUTS"
 		_:
@@ -109,23 +111,26 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_linear_velocity_label.text = "LINEAR SPEED      %.3f m/s" % linear_velocity.length()
 	_angular_velocity_label.text = "ANGULAR SPEED     %.3f rad/s" % angular_velocity.length()
 	_com_mode_label.text = "CENTER OF MASS    %s" % com_mode
-	_lift_force_label.text = "COLLECTIVE FORCE  %s N" % String.num(lift_force_n, 0)
-	_lift_twr_label.text = "LIFT TWR          %.2f / %.2f" % [actual_lift_twr, maximum_lift_twr]
+	_lift_force_label.text = "TOTAL FORCE       %s N" % String.num(lift_force_n, 0)
+	_lift_twr_label.text = "VERTICAL TWR      %.2f / %.2f" % [actual_lift_twr, maximum_lift_twr]
 	_vane_status_label.text = "VANE ARRAY        %d REGISTERED / %d HEALTHY" % [vane_count, vane_healthy_count]
 	_vane_status_label.add_theme_color_override(
 		"font_color", COLOR_ONLINE if vane_configuration_valid else COLOR_WARNING
 	)
-	_predicted_torque_label.text = "PREDICTED TORQUE  %.1f N·m (NOT APPLIED)" % predicted_torque.length()
+	_torque_output_label.text = "TOTAL TORQUE      %.1f N·m %s" % [
+		applied_torque.length(),
+		"APPLIED" if torque_applied else "ZERO / STANDBY",
+	]
 	if hover_power_percent >= 0.0 and hover_power_percent <= 100.0:
 		_hover_power_label.text = "HOVER THRESHOLD   %.1f%% OUTPUT" % hover_power_percent
 	else:
 		_hover_power_label.text = "HOVER THRESHOLD   UNREACHABLE"
 
 	if field_online:
-		_physics_label.text = "COLLECTIVE LIFT    ONLINE"
+		_physics_label.text = "VANE FIELD        ONLINE"
 		_physics_label.add_theme_color_override("font_color", COLOR_ONLINE)
 	else:
-		_physics_label.text = "COLLECTIVE LIFT    STANDBY"
+		_physics_label.text = "VANE FIELD        STANDBY"
 		_physics_label.add_theme_color_override("font_color", COLOR_MUTED)
 	_physics_label.text += "\nRIGID BODY        %s" % ("FROZEN" if body_frozen else "ACTIVE")
 
@@ -139,9 +144,11 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			+ "WORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
 			+ "LINEAR VEL: (%.3f, %.3f, %.3f) m/s\n" % [linear_velocity.x, linear_velocity.y, linear_velocity.z]
 			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
-			+ "LIFT FORCE: (%.0f, %.0f, %.0f) N\n" % [lift_force_vector.x, lift_force_vector.y, lift_force_vector.z]
+			+ "NET FORCE: (%.0f, %.0f, %.0f) N\n" % [lift_force_vector.x, lift_force_vector.y, lift_force_vector.z]
 			+ "LIFT TWR: %.2f / %.2f    GRAVITY: %.2f m/s²\n" % [actual_lift_twr, maximum_lift_twr, gravity_magnitude]
-			+ "PREDICTED TORQUE: (%.1f, %.1f, %.1f) N·m - NOT APPLIED\n" % [predicted_torque.x, predicted_torque.y, predicted_torque.z]
+			+ "APPLIED TORQUE: (%.1f, %.1f, %.1f) N·m\n" % [applied_torque.x, applied_torque.y, applied_torque.z]
+			+ "MAIN VECTOR: (%.2f, %.2f, %.2f)\n" % [main_direction_world.x, main_direction_world.y, main_direction_world.z]
+			+ "MANEUVER AUTHORITY: %.3f / axis\n" % float(telemetry.get("maneuver_authority_fraction", 0.0))
 			+ "VANE CONFIG: %s (%d registered)\n" % ["VALID" if vane_configuration_valid else "INVALID", vane_count]
 		)
 		for vane_state in vane_states:
@@ -157,10 +164,18 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			var contribution: Dictionary = vane_contribution
 			var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
 			var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
-			debug_text += "  FORCE %s: (%.0f, %.0f, %.0f) N | MOMENT (%.1f, %.1f, %.1f)\n" % [
+			debug_text += "  VANE %s: F(%.0f, %.0f, %.0f) N | M(%.1f, %.1f, %.1f)\n" % [
 				str(contribution.get("vane_id", "UNKNOWN")),
 				vane_force.x, vane_force.y, vane_force.z,
 				vane_torque.x, vane_torque.y, vane_torque.z,
+			]
+		for force_entry in telemetry.get("lift_force_vectors", []):
+			var force_data: Dictionary = force_entry
+			var applied_force: Vector3 = force_data.get("force_world", Vector3.ZERO)
+			var applied_point: Vector3 = force_data.get("application_point_world", Vector3.ZERO)
+			debug_text += "APPLIED %-13s | F %.0f N | P(%.2f, %.2f, %.2f)\n" % [
+				str(force_data.get("name", "FORCE")), applied_force.length(),
+				applied_point.x, applied_point.y, applied_point.z,
 			]
 		debug_text += "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
 		_debug_overview_label.text = debug_text
@@ -188,18 +203,18 @@ func _build_hud() -> void:
 	var status_content := _create_panel_content(status_panel)
 	_add_label(status_content, "PROTOTYPE STATUS", 16, COLOR_ACCENT)
 	_mass_label = _add_label(status_content, "SHIP MASS         -- kg", 14, COLOR_TEXT)
-	_physics_label = _add_label(status_content, "COLLECTIVE LIFT    STANDBY", 13, COLOR_MUTED)
+	_physics_label = _add_label(status_content, "VANE FIELD        STANDBY", 13, COLOR_MUTED)
 	_pitch_roll_label = _add_label(status_content, "PITCH +0.00    ROLL +0.00", 12, COLOR_MUTED)
 	_camera_mode_label = _add_label(status_content, "VIEW COCKPIT    INPUT FLIGHT CONTROL", 12, COLOR_MUTED)
 	_body_state_label = _add_label(status_content, "BODY STATE        ACTIVE", 12, COLOR_TEXT)
 	_linear_velocity_label = _add_label(status_content, "LINEAR SPEED      0.000 m/s", 12, COLOR_TEXT)
 	_angular_velocity_label = _add_label(status_content, "ANGULAR SPEED     0.000 rad/s", 12, COLOR_TEXT)
 	_com_mode_label = _add_label(status_content, "CENTER OF MASS    AUTO", 12, COLOR_TEXT)
-	_lift_force_label = _add_label(status_content, "COLLECTIVE FORCE  0 N", 12, COLOR_TEXT)
+	_lift_force_label = _add_label(status_content, "NET FORCE         0 N", 12, COLOR_TEXT)
 	_lift_twr_label = _add_label(status_content, "LIFT TWR          0.00 / 1.10", 12, COLOR_TEXT)
 	_hover_power_label = _add_label(status_content, "HOVER THRESHOLD   90.9% OUTPUT", 12, COLOR_TEXT)
-	_vane_status_label = _add_label(status_content, "VANE ARRAY        5 REGISTERED / 5 HEALTHY", 12, COLOR_TEXT)
-	_predicted_torque_label = _add_label(status_content, "PREDICTED TORQUE  0.0 N·m (NOT APPLIED)", 12, COLOR_MUTED)
+	_vane_status_label = _add_label(status_content, "VANE ARRAY        7 REGISTERED / 7 HEALTHY", 12, COLOR_TEXT)
+	_torque_output_label = _add_label(status_content, "NET TORQUE        0.0 N·m ZERO / STANDBY", 12, COLOR_MUTED)
 
 	var reticle := Label.new()
 	reticle.name = "AttitudeReferencePlaceholder"

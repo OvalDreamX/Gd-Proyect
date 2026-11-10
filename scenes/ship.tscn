@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3]
+[gd_scene load_steps=24 format=3]
 
 [ext_resource type="Script" path="res://scripts/ship_interactable.gd" id="1_ship"]
 [ext_resource type="Script" path="res://scripts/ship_flight_controller.gd" id="2_flight_controller"]
@@ -10,6 +10,9 @@
 [ext_resource type="Resource" path="res://data/vanes/bottom_rear_left.tres" id="8_vane_rear_left"]
 [ext_resource type="Resource" path="res://data/vanes/bottom_rear_right.tres" id="9_vane_rear_right"]
 [ext_resource type="Resource" path="res://data/vanes/main_rear.tres" id="10_vane_main_rear"]
+[ext_resource type="Resource" path="res://data/vanes/side_left.tres" id="11_vane_side_left"]
+[ext_resource type="Resource" path="res://data/vanes/side_right.tres" id="12_vane_side_right"]
+[ext_resource type="Script" path="res://scripts/force_vector_debug.gd" id="13_force_debug"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_hull"]
 size = Vector3(3.6, 1.5, 5.2)
@@ -49,7 +52,7 @@ size = Vector3(3.1, 0.13, 0.13)
 [node name="PrototypeFreighter" type="RigidBody3D"]
 position = Vector3(0, 0.78, 0)
 script = ExtResource("1_ship")
-freeze = true
+freeze = false
 mass = 12000.0
 can_sleep = true
 
@@ -127,10 +130,13 @@ current = false
 
 [node name="VaneController" type="Node" parent="."]
 script = ExtResource("5_vane_controller")
-vane_definitions = Array[Resource]([ExtResource("6_vane_front_left"), ExtResource("7_vane_front_right"), ExtResource("8_vane_rear_left"), ExtResource("9_vane_rear_right"), ExtResource("10_vane_main_rear")])
+vane_definitions = Array[Resource]([ExtResource("6_vane_front_left"), ExtResource("7_vane_front_right"), ExtResource("8_vane_rear_left"), ExtResource("9_vane_rear_right"), ExtResource("10_vane_main_rear"), ExtResource("11_vane_side_left"), ExtResource("12_vane_side_right")])
 
 [node name="RepulsorliftSystem" type="Node" parent="."]
 script = ExtResource("4_repulsorlift_system")
+
+[node name="ForceVectorDebug" type="Node3D" parent="."]
+script = ExtResource("13_force_debug")
 
 [node name="FlightController" type="Node" parent="."]
 script = ExtResource("2_flight_controller")

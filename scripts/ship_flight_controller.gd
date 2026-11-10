@@ -2,9 +2,8 @@ extends Node
 class_name ShipFlightController
 
 ## Ship-owned input and field-state controller.
-## Phase 2D adds one narrow connection: actual field power drives the
-## RepulsorliftSystem's fixed vertical collective-lift test.
-## This controller still does not calculate forces or manipulate the body.
+## Converts keyboard/mouse events into commanded values, while
+## RepulsorliftSystem owns all physical force calculations and applications.
 
 enum FieldState {
 	OFF,
@@ -26,12 +25,13 @@ enum FieldState {
 @export_range(5.0, 90.0, 1.0) var vector_output_change_degrees_per_second: float = 22.0
 
 @export_category("Mouse flight controls")
-## Normalized virtual-stick units per unscaled screen pixel. No auto-centering
-## is applied: the control position persists until the pilot moves it back.
+## Normalized virtual-stick units per unscaled screen pixel. No auto-centering:
+## mouse displacement persists until the pilot moves the virtual stick back.
 @export_range(0.0005, 0.02, 0.0005) var flight_control_mouse_sensitivity: float = 0.003
 
 const MIN_VECTOR_DISTRIBUTION_DEGREES: float = 0.0
 const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
+const DEFAULT_VECTOR_DISTRIBUTION_DEGREES: float = 90.0
 const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
 
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
@@ -41,13 +41,14 @@ const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
 var _startup_time_remaining: float = 0.0
-# Setpoints are pilot requests; outputs lag behind them to model spool/actuator response.
 var _field_power_command: float = 0.0
 var _field_power_output: float = 0.0
-var _vector_distribution_degrees: float = MIN_VECTOR_DISTRIBUTION_DEGREES
-var _vector_distribution_actual_degrees: float = MIN_VECTOR_DISTRIBUTION_DEGREES
+# Start in the 90-degree VTOL/hover setting so the existing takeoff test remains
+# intuitive. Q/E can move the main vector continuously in either direction.
+var _vector_distribution_degrees: float = DEFAULT_VECTOR_DISTRIBUTION_DEGREES
+var _vector_distribution_actual_degrees: float = DEFAULT_VECTOR_DISTRIBUTION_DEGREES
 var _yaw_command: float = 0.0
-# x = roll, y = pitch. These are normalized input positions, not ship attitude.
+# x = roll, y = pitch. These are normalized pilot commands, not ship attitude.
 var _roll_command: float = 0.0
 var _pitch_command: float = 0.0
 var _require_neutral_controls: bool = false
@@ -70,6 +71,7 @@ func _ready() -> void:
 	_hud.name = "FlightHUD"
 	add_child(_hud)
 	_hud.visible = false
+	_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
 	_publish_telemetry()
 
 
@@ -115,7 +117,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			var was_debug_interaction: bool = _debug_interaction_mode
 			_debug_interaction_mode = event.pressed
 			if was_debug_interaction and not _debug_interaction_mode:
-				# Do not reactivate a key that was held while the cursor was free.
 				_require_neutral_controls = true
 			_update_mouse_mode()
 			_publish_telemetry()
@@ -125,6 +126,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_F3 or event.physical_keycode == KEY_F3:
 			if event.pressed and not event.echo:
 				_debug_overview_enabled = not _debug_overview_enabled
+				_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
 				_publish_telemetry()
 				get_viewport().set_input_as_handled()
 			return
@@ -185,7 +187,7 @@ func _physics_process(delta: float) -> void:
 	if not pilot_ready:
 		if _field_state != FieldState.OFF:
 			_turn_field_off()
-		_repulsorlift_system.apply_collective_lift(false, 0.0)
+		_repulsorlift_system.apply_flight_control_forces(false, 0.0, DEFAULT_VECTOR_DISTRIBUTION_DEGREES, 0.0, 0.0, 0.0)
 		return
 
 	var telemetry_changed: bool = false
@@ -203,19 +205,20 @@ func _physics_process(delta: float) -> void:
 		_yaw_command = 0.0
 		telemetry_changed = true
 
-	# This is the only connection between field output and physical movement
-	# in this milestone. The RepulsorliftSystem submits one central force per
-	# physics tick; vector direction remains fixed upward for the Step 2 test.
-	_repulsorlift_system.apply_collective_lift(
+	# All six pilot values are now passed to the force allocator. Main vector
+	# direction is ship-relative; pitch/roll/yaw are separate vane force pairs.
+	_repulsorlift_system.apply_flight_control_forces(
 		_field_state == FieldState.ONLINE,
-		_field_power_output
+		_field_power_output,
+		_vector_distribution_actual_degrees,
+		_pitch_command,
+		_roll_command,
+		_yaw_command
 	)
 
 	if telemetry_changed:
 		_publish_telemetry()
 
-	# Physics telemetry is refreshed at 10 Hz: responsive enough for diagnosis
-	# without forcing HUD layout updates on every physics tick.
 	_telemetry_time_remaining -= delta
 	if _telemetry_time_remaining <= 0.0:
 		_telemetry_time_remaining = TELEMETRY_UPDATE_INTERVAL_SECONDS
@@ -236,7 +239,9 @@ func _turn_field_off() -> void:
 	_field_power_command = 0.0
 	_field_power_output = 0.0
 	_yaw_command = 0.0
-	_repulsorlift_system.apply_collective_lift(false, 0.0)
+	_pitch_command = 0.0
+	_roll_command = 0.0
+	_repulsorlift_system.apply_flight_control_forces(false, 0.0, _vector_distribution_actual_degrees, 0.0, 0.0, 0.0)
 	_set_field_state(FieldState.OFF)
 
 
@@ -257,7 +262,7 @@ func _update_online_commands(delta: float) -> bool:
 	var vector_axis: float = Input.get_axis("ship_vector_decrease", "ship_vector_increase")
 	var new_yaw: float = Input.get_axis("ship_yaw_left", "ship_yaw_right")
 
-	# Do not arm held keys from cockpit entry or the startup interval.
+	# Do not arm keys held during cockpit entry or the startup interval.
 	if _require_neutral_controls:
 		if is_zero_approx(power_axis) and is_zero_approx(vector_axis) and is_zero_approx(new_yaw):
 			_require_neutral_controls = false
