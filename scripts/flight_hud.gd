@@ -1,39 +1,19 @@
 extends CanvasLayer
 class_name FlightHUD
 
-## Presentation-only HUD. Receives telemetry snapshots from
-## ShipFlightController; it does not read input or calculate simulation values.
+## The cockpit flight display is intentionally separate from diagnostics.
+## All legacy force, vane, FCC and body telemetry is available only while F3
+## is active. This CanvasLayer never reads input or modifies simulation state.
+
+const HUD_OVERLAY_SCRIPT = preload("res://scripts/flight_hud_overlay.gd")
 
 const COLOR_TEXT: Color = Color(0.78, 0.88, 0.92, 1.0)
 const COLOR_MUTED: Color = Color(0.47, 0.64, 0.70, 1.0)
 const COLOR_ACCENT: Color = Color(0.30, 0.83, 0.90, 1.0)
-const COLOR_WARNING: Color = Color(0.98, 0.72, 0.32, 1.0)
-const COLOR_ONLINE: Color = Color(0.43, 0.90, 0.64, 1.0)
 
-var _field_state_label: Label
-var _field_power_label: Label
-var _field_power_output_label: Label
-var _vector_label: Label
-var _vector_output_label: Label
-var _yaw_label: Label
-var _fcc_mode_label: Label
-var _fcc_output_label: Label
-var _mass_label: Label
-var _physics_label: Label
-var _pitch_roll_label: Label
-var _camera_mode_label: Label
-var _body_state_label: Label
-var _linear_velocity_label: Label
-var _angular_velocity_label: Label
-var _com_mode_label: Label
-var _lift_force_label: Label
-var _lift_twr_label: Label
-var _hover_power_label: Label
-var _vane_status_label: Label
-var _torque_output_label: Label
-var _instruction_label: Label
-var _debug_overview_panel: PanelContainer
-var _debug_overview_label: Label
+var _flight_display: Control
+var _debug_panel: PanelContainer
+var _debug_text_label: Label
 
 
 func _ready() -> void:
@@ -43,341 +23,192 @@ func _ready() -> void:
 
 
 func update_telemetry(telemetry: Dictionary) -> void:
-	if not is_instance_valid(_field_state_label):
+	if not is_instance_valid(_flight_display):
 		return
 
-	var field_state: String = str(telemetry.get("field_state", "OFF"))
-	var power_command: float = float(telemetry.get("field_power_command", 0.0))
-	var power_output: float = float(telemetry.get("field_power_output", 0.0))
-	var vector_command_degrees: float = float(telemetry.get("vector_distribution_degrees", 0.0))
-	var vector_actual_degrees: float = float(telemetry.get("vector_distribution_actual_degrees", 0.0))
-	var yaw: float = float(telemetry.get("yaw_command", 0.0))
-	var pitch: float = float(telemetry.get("pitch_command", 0.0))
-	var roll: float = float(telemetry.get("roll_command", 0.0))
-	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
-	var body_frozen: bool = bool(telemetry.get("rigid_body_frozen", true))
-	var camera_view: String = str(telemetry.get("camera_view", "COCKPIT"))
-	var input_mode: String = str(telemetry.get("input_mode", "FLIGHT CONTROL"))
-	var camera_yaw: float = float(telemetry.get("camera_yaw_degrees", 0.0))
-	var camera_pitch: float = float(telemetry.get("camera_pitch_degrees", 0.0))
+	_flight_display.call("update_telemetry", telemetry)
+
 	var debug_enabled: bool = bool(telemetry.get("debug_overview_enabled", false))
-	var debug_interaction: bool = bool(telemetry.get("debug_interaction_mode", false))
-	var ship_position: Vector3 = telemetry.get("ship_position", Vector3.ZERO)
-	var linear_velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO)
-	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
-	var is_sleeping: bool = bool(telemetry.get("ship_is_sleeping", false))
-	var com_mode: String = str(telemetry.get("center_of_mass_mode", "AUTO"))
-	var lift_force_vector: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO)
-	var lift_force_n: float = float(telemetry.get("lift_force_newtons", 0.0))
-	var actual_lift_twr: float = float(telemetry.get("lift_actual_twr", 0.0))
-	var maximum_lift_twr: float = float(telemetry.get("lift_maximum_twr", 0.0))
-	var hover_power_percent: float = float(telemetry.get("lift_hover_power_percent", -1.0))
-	var gravity_magnitude: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
-	var field_online: bool = bool(telemetry.get("lift_field_online", false))
-	var main_direction_world: Vector3 = telemetry.get("lift_main_direction_world", Vector3.UP)
-	var applied_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	var torque_applied: bool = bool(telemetry.get("lift_torque_applied", false))
-	var vane_count: int = int(telemetry.get("vane_count", 0))
-	var vane_healthy_count: int = int(telemetry.get("vane_healthy_count", 0))
-	var vane_configuration_valid: bool = bool(telemetry.get("vane_configuration_valid", false))
-	var vane_states: Array = telemetry.get("vane_states", [])
-	var vane_contributions: Array = telemetry.get("lift_vane_contributions", [])
+	var camera_view: String = str(telemetry.get("camera_view", "COCKPIT"))
+	_flight_display.visible = camera_view == "COCKPIT" and not debug_enabled
+	_debug_panel.visible = debug_enabled
 
-	var fcc_assistance_enabled: bool = bool(telemetry.get("fcc_assistance_enabled", true))
-	var fcc_control_available: bool = bool(telemetry.get("fcc_control_available", false))
-	var fcc_desired_rate: Vector3 = telemetry.get("fcc_desired_rate_local_rad_s", Vector3.ZERO)
-	var fcc_actual_rate: Vector3 = telemetry.get("fcc_actual_rate_local_rad_s", Vector3.ZERO)
-	var fcc_rate_error: Vector3 = telemetry.get("fcc_rate_error_local_rad_s", Vector3.ZERO)
-	var fcc_output: Vector3 = telemetry.get("fcc_control_output_by_axis", Vector3.ZERO)
-	var fcc_any_saturated: bool = bool(telemetry.get("fcc_any_axis_saturated", false))
-	var fcc_pitch_saturated: bool = bool(telemetry.get("fcc_pitch_saturated", false))
-	var fcc_roll_saturated: bool = bool(telemetry.get("fcc_roll_saturated", false))
-	var fcc_yaw_saturated: bool = bool(telemetry.get("fcc_yaw_saturated", false))
-
-	_field_state_label.text = "FIELD STATE       %s" % field_state
-	match field_state:
-		"OFF":
-			_field_state_label.add_theme_color_override("font_color", COLOR_MUTED)
-			_instruction_label.text = "PRESS F TO START THE REPULSORLIFT GENERATOR"
-		"STARTING":
-			_field_state_label.add_theme_color_override("font_color", COLOR_WARNING)
-			_instruction_label.text = "GENERATOR STARTING..."
-		"ONLINE":
-			_field_state_label.add_theme_color_override("font_color", COLOR_ONLINE)
-			if bool(telemetry.get("controls_armed", true)):
-				_instruction_label.text = (
-					"FIELD ONLINE  |  MOUSE REQUESTS PITCH / ROLL RATE  |  A/D YAW"
-				)
-			else:
-				_instruction_label.text = "RELEASE W/S, Q/E AND A/D TO ARM THE COMMAND INPUTS"
-		_:
-			_field_state_label.add_theme_color_override("font_color", COLOR_MUTED)
-			_instruction_label.text = "FIELD STATE UNKNOWN"
-
-	_field_power_label.text = "POWER SETPOINT       " + String.num(power_command * 100.0, 1) + "%"
-	_field_power_output_label.text = "POWER OUTPUT         " + String.num(power_output * 100.0, 1) + "%"
-	_vector_label.text = "VECTOR SETPOINT      " + String.num(vector_command_degrees, 1) + "°"
-	_vector_output_label.text = "VECTOR ACTUAL        " + String.num(vector_actual_degrees, 1) + "°"
-	_yaw_label.text = "YAW COMMAND      %s" % String.num(yaw, 2)
-
-	_fcc_mode_label.text = "FCC ASSIST        %s" % (
-		"ON / RATE CONTROL" if fcc_assistance_enabled else "OFF / DIRECT VANES"
-	)
-	_fcc_mode_label.add_theme_color_override(
-		"font_color", COLOR_ONLINE if fcc_assistance_enabled else COLOR_WARNING
-	)
-	_fcc_output_label.text = "FCC OUTPUT P/R/Y  %+.2f / %+.2f / %+.2f" % [
-		fcc_output.x, fcc_output.z, fcc_output.y
-	]
-	if fcc_any_saturated:
-		_fcc_output_label.add_theme_color_override("font_color", COLOR_WARNING)
-	else:
-		_fcc_output_label.add_theme_color_override("font_color", COLOR_TEXT)
-
-	_mass_label.text = "SHIP MASS         %s kg" % String.num(mass_kg, 0)
-	_pitch_roll_label.text = "PITCH %+.2f    ROLL %+.2f" % [pitch, roll]
-	_camera_mode_label.text = "VIEW %s    INPUT %s" % [camera_view, input_mode]
-	_body_state_label.text = "BODY STATE        %s" % ("SLEEPING" if is_sleeping else "ACTIVE")
-	_linear_velocity_label.text = "LINEAR SPEED      %.3f m/s" % linear_velocity.length()
-	_angular_velocity_label.text = "ANGULAR SPEED     %.3f rad/s" % angular_velocity.length()
-	_com_mode_label.text = "CENTER OF MASS    %s" % com_mode
-	_lift_force_label.text = "TOTAL FORCE       %s N" % String.num(lift_force_n, 0)
-	_lift_twr_label.text = "VERTICAL TWR      %.2f / %.2f" % [actual_lift_twr, maximum_lift_twr]
-	_vane_status_label.text = "VANE ARRAY        %d REGISTERED / %d HEALTHY" % [vane_count, vane_healthy_count]
-	_vane_status_label.add_theme_color_override(
-		"font_color", COLOR_ONLINE if vane_configuration_valid else COLOR_WARNING
-	)
-	_torque_output_label.text = "TOTAL TORQUE      %.1f N·m %s" % [
-		applied_torque.length(),
-		"APPLIED" if torque_applied else "ZERO / STANDBY",
-	]
-	if hover_power_percent >= 0.0 and hover_power_percent <= 100.0:
-		_hover_power_label.text = "HOVER THRESHOLD   %.1f%% OUTPUT" % hover_power_percent
-	else:
-		_hover_power_label.text = "HOVER THRESHOLD   UNREACHABLE"
-
-	if field_online:
-		_physics_label.text = "VANE FIELD        ONLINE"
-		_physics_label.add_theme_color_override("font_color", COLOR_ONLINE)
-	else:
-		_physics_label.text = "VANE FIELD        STANDBY"
-		_physics_label.add_theme_color_override("font_color", COLOR_MUTED)
-	_physics_label.text += "\nRIGID BODY        %s" % ("FROZEN" if body_frozen else "ACTIVE")
-
-	_debug_overview_panel.visible = debug_enabled
 	if debug_enabled:
-		var to_degrees: float = 180.0 / PI
-		var saturation_text: String = "NONE"
-		if fcc_any_saturated:
-			var saturated_axes: PackedStringArray = PackedStringArray()
-			if fcc_pitch_saturated:
-				saturated_axes.append("PITCH")
-			if fcc_roll_saturated:
-				saturated_axes.append("ROLL")
-			if fcc_yaw_saturated:
-				saturated_axes.append("YAW")
-			saturation_text = ", ".join(saturated_axes)
-
-		var debug_text: String = (
-			"VIEW: %s     INPUT: %s\n" % [camera_view, input_mode]
-			+ "VIRTUAL PITCH: %+.3f     ROLL: %+.3f\n" % [pitch, roll]
-			+ "CAMERA YAW: %+.1f°     PITCH: %+.1f°\n" % [camera_yaw, camera_pitch]
-			+ "DEBUG UI INTERACTION: %s\n" % ("ACTIVE" if debug_interaction else "INACTIVE")
-			+ "FCC MODE: %s     CONTROL AVAILABLE: %s\n" % [
-				"ASSISTED RATE CONTROL" if fcc_assistance_enabled else "DIRECT VANE CONTROL",
-				"YES" if fcc_control_available else "NO",
-			]
-			+ "FCC RATE TARGET P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
-				fcc_desired_rate.x * to_degrees,
-				fcc_desired_rate.z * to_degrees,
-				fcc_desired_rate.y * to_degrees,
-			]
-			+ "FCC RATE ACTUAL P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
-				fcc_actual_rate.x * to_degrees,
-				fcc_actual_rate.z * to_degrees,
-				fcc_actual_rate.y * to_degrees,
-			]
-			+ "FCC RATE ERROR P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
-				fcc_rate_error.x * to_degrees,
-				fcc_rate_error.z * to_degrees,
-				fcc_rate_error.y * to_degrees,
-			]
-			+ "FCC OUTPUT P/R/Y: %+.2f / %+.2f / %+.2f\n" % [
-				fcc_output.x, fcc_output.z, fcc_output.y,
-			]
-			+ "FCC SATURATION: %s\n" % saturation_text
-			+ "WORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
-			+ "LINEAR VEL: (%.3f, %.3f, %.3f) m/s\n" % [linear_velocity.x, linear_velocity.y, linear_velocity.z]
-			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
-			+ "NET FORCE: (%.0f, %.0f, %.0f) N\n" % [lift_force_vector.x, lift_force_vector.y, lift_force_vector.z]
-			+ "LIFT TWR: %.2f / %.2f    GRAVITY: %.2f m/s²\n" % [actual_lift_twr, maximum_lift_twr, gravity_magnitude]
-			+ "APPLIED TORQUE: (%.1f, %.1f, %.1f) N·m\n" % [applied_torque.x, applied_torque.y, applied_torque.z]
-			+ "MAIN VECTOR: (%.2f, %.2f, %.2f)\n" % [main_direction_world.x, main_direction_world.y, main_direction_world.z]
-			+ "MANEUVER AUTHORITY: %.3f / axis\n" % float(telemetry.get("maneuver_authority_fraction", 0.0))
-			+ "VANE CONFIG: %s (%d registered)\n" % ["VALID" if vane_configuration_valid else "INVALID", vane_count]
-		)
-		for vane_state in vane_states:
-			var state: Dictionary = vane_state
-			debug_text += "%s [%s] integrity %.2f failed=%s authority %.3f TWR\n" % [
-				str(state.get("vane_id", "UNKNOWN")),
-				str(state.get("group_id", "UNKNOWN")),
-				float(state.get("integrity", 0.0)),
-				str(state.get("failed", false)),
-				float(state.get("effective_authority_twr", 0.0)),
-			]
-		for vane_contribution in vane_contributions:
-			var contribution: Dictionary = vane_contribution
-			var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
-			var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
-			debug_text += "  VANE %s: F(%.0f, %.0f, %.0f) N | M(%.1f, %.1f, %.1f)\n" % [
-				str(contribution.get("vane_id", "UNKNOWN")),
-				vane_force.x, vane_force.y, vane_force.z,
-				vane_torque.x, vane_torque.y, vane_torque.z,
-			]
-		for force_entry in telemetry.get("lift_force_vectors", []):
-			var force_data: Dictionary = force_entry
-			var applied_force: Vector3 = force_data.get("force_world", Vector3.ZERO)
-			var applied_point: Vector3 = force_data.get("application_point_world", Vector3.ZERO)
-			debug_text += "APPLIED %-13s | F %.0f N | P(%.2f, %.2f, %.2f)\n" % [
-				str(force_data.get("name", "FORCE")), applied_force.length(),
-				applied_point.x, applied_point.y, applied_point.z,
-			]
-		debug_text += "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
-		_debug_overview_label.text = debug_text
+		_update_debug_text(telemetry)
 
 
 func _build_hud() -> void:
-	var root := Control.new()
-	root.name = "HUDRoot"
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(root)
+	_flight_display = Control.new()
+	_flight_display.name = "CockpitFlightDisplay"
+	_flight_display.set_script(HUD_OVERLAY_SCRIPT)
+	_flight_display.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_flight_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_flight_display)
 
-	var system_panel := _create_panel(root, Vector2(20.0, 20.0), Vector2(390.0, 270.0))
-	var system_content := _create_panel_content(system_panel)
-	_add_label(system_content, "REPULSORLIFT CONTROL", 16, COLOR_ACCENT)
-	_field_state_label = _add_label(system_content, "FIELD STATE       OFF", 15, COLOR_MUTED)
-	_field_power_label = _add_label(system_content, "POWER SETPOINT       0.0%", 14, COLOR_TEXT)
-	_field_power_output_label = _add_label(system_content, "POWER OUTPUT         0.0%", 14, COLOR_TEXT)
-	_vector_label = _add_label(system_content, "VECTOR SETPOINT      0.0°", 14, COLOR_TEXT)
-	_vector_output_label = _add_label(system_content, "VECTOR ACTUAL        0.0°", 14, COLOR_TEXT)
-	_add_label(system_content, "0° MAIN  |  90° LIFT  |  110° COMBINED BRAKE", 11, COLOR_MUTED)
-	_yaw_label = _add_label(system_content, "YAW COMMAND      +0.00", 14, COLOR_TEXT)
-	_fcc_mode_label = _add_label(system_content, "FCC ASSIST        ON / RATE CONTROL", 13, COLOR_ONLINE)
-	_fcc_output_label = _add_label(system_content, "FCC OUTPUT P/R/Y  +0.00 / +0.00 / +0.00", 12, COLOR_TEXT)
+	_debug_panel = PanelContainer.new()
+	_debug_panel.name = "F3DiagnosticsPanel"
+	_debug_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_debug_panel.offset_left = 22.0
+	_debug_panel.offset_top = 22.0
+	_debug_panel.offset_right = -22.0
+	_debug_panel.offset_bottom = -22.0
+	_debug_panel.visible = false
+	_debug_panel.add_theme_stylebox_override("panel", _make_panel_style())
+	add_child(_debug_panel)
 
-	var status_panel := _create_anchored_panel(root)
-	var status_content := _create_panel_content(status_panel)
-	_add_label(status_content, "PROTOTYPE STATUS", 16, COLOR_ACCENT)
-	_mass_label = _add_label(status_content, "SHIP MASS         -- kg", 14, COLOR_TEXT)
-	_physics_label = _add_label(status_content, "VANE FIELD        STANDBY", 13, COLOR_MUTED)
-	_pitch_roll_label = _add_label(status_content, "PITCH +0.00    ROLL +0.00", 12, COLOR_MUTED)
-	_camera_mode_label = _add_label(status_content, "VIEW COCKPIT    INPUT FLIGHT CONTROL", 12, COLOR_MUTED)
-	_body_state_label = _add_label(status_content, "BODY STATE        ACTIVE", 12, COLOR_TEXT)
-	_linear_velocity_label = _add_label(status_content, "LINEAR SPEED      0.000 m/s", 12, COLOR_TEXT)
-	_angular_velocity_label = _add_label(status_content, "ANGULAR SPEED     0.000 rad/s", 12, COLOR_TEXT)
-	_com_mode_label = _add_label(status_content, "CENTER OF MASS    AUTO", 12, COLOR_TEXT)
-	_lift_force_label = _add_label(status_content, "NET FORCE         0 N", 12, COLOR_TEXT)
-	_lift_twr_label = _add_label(status_content, "LIFT TWR          0.00 / 1.10", 12, COLOR_TEXT)
-	_hover_power_label = _add_label(status_content, "HOVER THRESHOLD   90.9% OUTPUT", 12, COLOR_TEXT)
-	_vane_status_label = _add_label(status_content, "VANE ARRAY        7 REGISTERED / 7 HEALTHY", 12, COLOR_TEXT)
-	_torque_output_label = _add_label(status_content, "NET TORQUE        0.0 N·m ZERO / STANDBY", 12, COLOR_MUTED)
-
-	var reticle := Label.new()
-	reticle.name = "AttitudeReferencePlaceholder"
-	reticle.text = "+"
-	reticle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	reticle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	reticle.add_theme_color_override("font_color", Color(0.48, 0.78, 0.82, 0.65))
-	reticle.add_theme_font_size_override("font_size", 24)
-	reticle.set_anchors_preset(Control.PRESET_CENTER)
-	reticle.offset_left = -12.0
-	reticle.offset_top = -12.0
-	reticle.offset_right = 12.0
-	reticle.offset_bottom = 12.0
-	root.add_child(reticle)
-
-	_debug_overview_panel = _create_panel(root, Vector2(20.0, 305.0), Vector2(600.0, 400.0))
-	_debug_overview_panel.name = "DebugOverviewPanel"
-	_debug_overview_panel.visible = false
-	var debug_content := _create_panel_content(_debug_overview_panel)
-	_add_label(debug_content, "FLIGHT / FCC / VANE DEBUG OVERVIEW", 13, COLOR_ACCENT)
-	_debug_overview_label = _add_label(debug_content, "VIEW: COCKPIT", 12, COLOR_TEXT)
-
-	var instruction_panel := PanelContainer.new()
-	instruction_panel.name = "InstructionPanel"
-	instruction_panel.anchor_left = 0.5
-	instruction_panel.anchor_right = 0.5
-	instruction_panel.anchor_top = 1.0
-	instruction_panel.anchor_bottom = 1.0
-	instruction_panel.offset_left = -430.0
-	instruction_panel.offset_right = 430.0
-	instruction_panel.offset_top = -64.0
-	instruction_panel.offset_bottom = -18.0
-	instruction_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	instruction_panel.add_theme_stylebox_override("panel", _make_panel_style())
-	root.add_child(instruction_panel)
-
-	var instruction_content := _create_panel_content(instruction_panel)
-	_instruction_label = _add_label(
-		instruction_content,
-		"F FIELD  |  W/S POWER  |  Q/E VECTOR  |  A/D YAW  |  MOUSE P/R RATE  |  V FCC ASSIST  |  C VIEW  |  RMB LOOK  |  SHIFT UI  |  F3 DEBUG",
-		10,
-		COLOR_TEXT
-	)
-	_instruction_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-
-
-func _create_panel(parent: Control, panel_position: Vector2, panel_size: Vector2) -> PanelContainer:
-	var panel := PanelContainer.new()
-	panel.position = panel_position
-	panel.size = panel_size
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_theme_stylebox_override("panel", _make_panel_style())
-	parent.add_child(panel)
-	return panel
-
-
-func _create_anchored_panel(parent: Control) -> PanelContainer:
-	var panel := PanelContainer.new()
-	panel.name = "PrototypeStatusPanel"
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.offset_left = -380.0
-	panel.offset_right = -20.0
-	panel.offset_top = 20.0
-	panel.offset_bottom = 440.0
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_theme_stylebox_override("panel", _make_panel_style())
-	parent.add_child(panel)
-	return panel
-
-
-func _create_panel_content(panel: PanelContainer) -> VBoxContainer:
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 7)
-	panel.add_child(content)
-	return content
+	content.add_theme_constant_override("separation", 8)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_debug_panel.add_child(content)
+
+	var title := Label.new()
+	title.text = "FLIGHT / REPULSORLIFT / FCC DIAGNOSTICS"
+	title.add_theme_font_size_override("font_size", 17)
+	title.add_theme_color_override("font_color", COLOR_ACCENT)
+	content.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "F3 CLOSES DIAGNOSTICS  |  FORCE ARROWS ARE SHOWN IN THE WORLD  |  SHIFT WHILE RMB-LOOKING RELEASES THE CURSOR"
+	subtitle.add_theme_font_size_override("font_size", 10)
+	subtitle.add_theme_color_override("font_color", COLOR_MUTED)
+	content.add_child(subtitle)
+
+	var divider := HSeparator.new()
+	content.add_child(divider)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "DiagnosticsScroll"
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	content.add_child(scroll)
+
+	_debug_text_label = Label.new()
+	_debug_text_label.name = "DiagnosticsText"
+	_debug_text_label.add_theme_font_size_override("font_size", 12)
+	_debug_text_label.add_theme_color_override("font_color", COLOR_TEXT)
+	_debug_text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_debug_text_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_debug_text_label.custom_minimum_size = Vector2(0.0, 600.0)
+	_debug_text_label.custom_maximum_size = Vector2(1180.0, 0.0)
+	scroll.add_child(_debug_text_label)
 
 
-func _add_label(parent: Container, text: String, font_size: int, color: Color) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", font_size)
-	label.add_theme_color_override("font_color", color)
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	parent.add_child(label)
-	return label
+func _update_debug_text(telemetry: Dictionary) -> void:
+	var to_degrees: float = 180.0 / PI
+	var field_state: String = str(telemetry.get("field_state", "OFF"))
+	var power_command: float = float(telemetry.get("field_power_command", 0.0))
+	var power_output: float = float(telemetry.get("field_power_output", 0.0))
+	var vector_command: float = float(telemetry.get("vector_distribution_degrees", 90.0))
+	var vector_actual: float = float(telemetry.get("vector_distribution_actual_degrees", 90.0))
+	var pitch_command: float = float(telemetry.get("pitch_command", 0.0))
+	var roll_command: float = float(telemetry.get("roll_command", 0.0))
+	var yaw_command: float = float(telemetry.get("yaw_command", 0.0))
+	var input_mode: String = str(telemetry.get("input_mode", "FLIGHT CONTROL"))
+	var camera_view: String = str(telemetry.get("camera_view", "COCKPIT"))
+	var camera_yaw: float = float(telemetry.get("camera_yaw_degrees", 0.0))
+	var camera_pitch: float = float(telemetry.get("camera_pitch_degrees", 0.0))
+	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
+	var position: Vector3 = telemetry.get("ship_position", Vector3.ZERO)
+	var velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO)
+	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
+	var basis: Basis = telemetry.get("ship_global_basis", Basis.IDENTITY)
+	basis = basis.orthonormalized()
+	var pitch_attitude: float = rad_to_deg(asin(clampf(-basis.z.y, -1.0, 1.0)))
+	var roll_attitude: float = rad_to_deg(atan2(basis.x.y, basis.y.y))
+	var forward: Vector3 = -basis.z.normalized()
+	var heading: float = fposmod(rad_to_deg(atan2(-forward.x, -forward.z)), 360.0)
+	var gravity: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
+	var net_force: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO)
+	var net_force_newtons: float = float(telemetry.get("lift_force_newtons", 0.0))
+	var net_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
+	var main_direction: Vector3 = telemetry.get("lift_main_direction_world", Vector3.ZERO)
+	var actual_twr: float = float(telemetry.get("lift_actual_twr", 0.0))
+	var maximum_twr: float = float(telemetry.get("lift_maximum_twr", 0.0))
+	var hover_power: float = float(telemetry.get("lift_hover_power_percent", -1.0))
+	var vane_states: Array = telemetry.get("vane_states", [])
+	var vane_contributions: Array = telemetry.get("lift_vane_contributions", [])
+	var force_vectors: Array = telemetry.get("lift_force_vectors", [])
+	var fcc_desired: Vector3 = telemetry.get("fcc_desired_rate_local_rad_s", Vector3.ZERO)
+	var fcc_actual: Vector3 = telemetry.get("fcc_actual_rate_local_rad_s", Vector3.ZERO)
+	var fcc_error: Vector3 = telemetry.get("fcc_rate_error_local_rad_s", Vector3.ZERO)
+	var fcc_output: Vector3 = telemetry.get("fcc_control_output_by_axis", Vector3.ZERO)
+	var fcc_saturated_axes: PackedStringArray = PackedStringArray()
+	if bool(telemetry.get("fcc_pitch_saturated", false)):
+		fcc_saturated_axes.append("PITCH")
+	if bool(telemetry.get("fcc_roll_saturated", false)):
+		fcc_saturated_axes.append("ROLL")
+	if bool(telemetry.get("fcc_yaw_saturated", false)):
+		fcc_saturated_axes.append("YAW")
+	var saturation_text: String = ", ".join(fcc_saturated_axes) if not fcc_saturated_axes.is_empty() else "NONE"
+
+	var hover_threshold_text: String = "UNREACHABLE"
+	if hover_power >= 0.0:
+		hover_threshold_text = "%.1f%%" % hover_power
+
+	var lines: PackedStringArray = PackedStringArray()
+	lines.append("[ PILOT / VIEW ]")
+	lines.append("Field state: %s | Power setpoint/output: %.1f%% / %.1f%% | Vector setpoint/output: %.1f° / %.1f°" % [field_state, power_command * 100.0, power_output * 100.0, vector_command, vector_actual])
+	lines.append("Pilot commands: pitch %.3f | roll %.3f | yaw %.3f | Controls armed: %s" % [pitch_command, roll_command, yaw_command, str(bool(telemetry.get("controls_armed", false)))])
+	lines.append("Camera: %s | Camera look yaw/pitch: %+.2f° / %+.2f° | Input mode: %s | Debug UI interaction: %s" % [camera_view, camera_yaw, camera_pitch, input_mode, str(bool(telemetry.get("debug_interaction_mode", false)))])
+	lines.append("FCC: %s | Control available: %s | Output P/R/Y: %+.3f / %+.3f / %+.3f" % ["ASSISTED RATE CONTROL" if bool(telemetry.get("fcc_assistance_enabled", true)) else "DIRECT VANES", str(bool(telemetry.get("fcc_control_available", false))), fcc_output.x, fcc_output.z, fcc_output.y])
+	lines.append("")
+	lines.append("[ FLIGHT STATE ]")
+	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, position.y])
+	lines.append("Velocity: (%.3f, %.3f, %.3f) m/s | Speed: %.3f m/s | Vertical speed: %+.3f m/s" % [velocity.x, velocity.y, velocity.z, velocity.length(), velocity.y])
+	lines.append("Attitude: pitch %+.2f° | roll %+.2f° | heading %03.0f°" % [pitch_attitude, roll_attitude, heading])
+	lines.append("Angular velocity world: (%.4f, %.4f, %.4f) rad/s | Magnitude: %.4f rad/s" % [angular_velocity.x, angular_velocity.y, angular_velocity.z, angular_velocity.length()])
+	lines.append("Rigid body frozen: %s | Sleeping: %s | COM mode: %s | Physics output connected: %s" % [str(bool(telemetry.get("rigid_body_frozen", false))), str(bool(telemetry.get("ship_is_sleeping", false))), str(telemetry.get("center_of_mass_mode", "AUTO")), str(bool(telemetry.get("physics_output_connected", false)))])
+	lines.append("")
+	lines.append("[ FCC RATE LOOP ]")
+	lines.append("Requested local rate P/R/Y: %+.2f / %+.2f / %+.2f deg/s" % [fcc_desired.x * to_degrees, fcc_desired.z * to_degrees, fcc_desired.y * to_degrees])
+	lines.append("Actual local rate P/R/Y: %+.2f / %+.2f / %+.2f deg/s" % [fcc_actual.x * to_degrees, fcc_actual.z * to_degrees, fcc_actual.y * to_degrees])
+	lines.append("Rate error P/R/Y: %+.2f / %+.2f / %+.2f deg/s | Saturation: %s" % [fcc_error.x * to_degrees, fcc_error.z * to_degrees, fcc_error.y * to_degrees, saturation_text])
+	lines.append("Rate gain: %.3f | Maximum FCC output: %.3f" % [float(telemetry.get("fcc_rate_response_gain", 0.0)), float(telemetry.get("fcc_maximum_control_output", 0.0))])
+	lines.append("")
+	lines.append("[ FORCE / LIFT ]")
+	lines.append("Total force: (%.1f, %.1f, %.1f) N | Magnitude: %.1f N" % [net_force.x, net_force.y, net_force.z, net_force_newtons])
+	lines.append("Main vector world: (%.3f, %.3f, %.3f) | Applied torque: (%.2f, %.2f, %.2f) N·m" % [main_direction.x, main_direction.y, main_direction.z, net_torque.x, net_torque.y, net_torque.z])
+	lines.append("Main vector convention: 0° forward (-Z) | 90° ship-up (+Y) | 110° up/rearward blend")
+	lines.append("Vertical TWR: %.3f / %.3f | Gravity: %.3f m/s² | Hover threshold: %s" % [actual_twr, maximum_twr, gravity, hover_threshold_text])
+	lines.append("Maneuver authority fraction: %.4f | Reference gravity: %.3f m/s²" % [float(telemetry.get("maneuver_authority_fraction", 0.0)), float(telemetry.get("reference_gravity_mps2", 9.81))])
+	lines.append("")
+	lines.append("[ VANE CONFIGURATION / CONDITION ]")
+	lines.append("Configuration valid: %s | Vane count: %d | Healthy count: %d" % [str(bool(telemetry.get("vane_configuration_valid", false))), int(telemetry.get("vane_count", 0)), int(telemetry.get("vane_healthy_count", 0))])
+	for vane_value in vane_states:
+		var vane: Dictionary = vane_value
+		lines.append("%s | group=%s | enabled=%s | integrity=%.3f | failed=%s | nominal=%.3f TWR | effective=%.3f TWR | local pos=%s" % [str(vane.get("vane_id", "UNKNOWN")), str(vane.get("group_id", "UNKNOWN")), str(vane.get("enabled", true)), float(vane.get("integrity", 0.0)), str(vane.get("failed", false)), float(vane.get("nominal_authority_twr", 0.0)), float(vane.get("effective_authority_twr", 0.0)), str(vane.get("local_position", Vector3.ZERO))])
+	lines.append("")
+	lines.append("[ INDIVIDUAL VANE CONTRIBUTIONS ]")
+	if vane_contributions.is_empty():
+		lines.append("No individual vane forces submitted on the current physics tick.")
+	for contribution_value in vane_contributions:
+		var contribution: Dictionary = contribution_value
+		var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
+		var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
+		lines.append("%s | F=(%.1f, %.1f, %.1f) N | M=(%.2f, %.2f, %.2f) N·m | point=%s" % [str(contribution.get("vane_id", "UNKNOWN")), vane_force.x, vane_force.y, vane_force.z, vane_torque.x, vane_torque.y, vane_torque.z, str(contribution.get("application_point_world", Vector3.ZERO))])
+	lines.append("")
+	lines.append("[ APPLIED RESULTANT VECTORS ]")
+	if force_vectors.is_empty():
+		lines.append("No force vectors submitted on the current physics tick.")
+	for force_value in force_vectors:
+		var force_entry: Dictionary = force_value
+		var applied_force: Vector3 = force_entry.get("force_world", Vector3.ZERO)
+		lines.append("%s | kind=%s | magnitude=%.1f N | force=%s | application point=%s" % [str(force_entry.get("name", "FORCE")), str(force_entry.get("kind", "unknown")), applied_force.length(), str(applied_force), str(force_entry.get("application_point_world", Vector3.ZERO))])
+
+	_debug_text_label.text = "\n".join(lines)
+	_debug_text_label.custom_minimum_size.y = maxf(600.0, float(lines.size()) * 19.0)
 
 
 func _make_panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.012, 0.027, 0.038, 0.86)
-	style.border_color = Color(0.16, 0.49, 0.57, 0.88)
+	style.bg_color = Color(0.012, 0.027, 0.038, 0.94)
+	style.border_color = Color(0.16, 0.49, 0.57, 0.95)
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(4)
-	style.content_margin_left = 12.0
-	style.content_margin_right = 12.0
-	style.content_margin_top = 9.0
-	style.content_margin_bottom = 9.0
+	style.content_margin_left = 14.0
+	style.content_margin_right = 14.0
+	style.content_margin_top = 11.0
+	style.content_margin_bottom = 11.0
 	return style

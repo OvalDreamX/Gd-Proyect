@@ -32,7 +32,7 @@ enum FieldState {
 const MIN_VECTOR_DISTRIBUTION_DEGREES: float = 0.0
 const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
 const DEFAULT_VECTOR_DISTRIBUTION_DEGREES: float = 90.0
-const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
+const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 1.0 / 30.0
 
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 @onready var _camera_controller: ShipCameraController = get_node("../CameraController") as ShipCameraController
