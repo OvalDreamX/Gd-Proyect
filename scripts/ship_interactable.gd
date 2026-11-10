@@ -3,11 +3,6 @@ class_name ShipInteractable
 ## Physics-enabled placeholder freighter. The single rigid-body root is retained
 ## for all flight forces, moments, collision response, and future cargo changes.
 
-@export_category("Prototype rotational damping")
-## Passive angular-rate damping only; this is not the FCC or attitude hold.
-## It prevents a small input from producing an indefinitely undamped spin.
-@export_range(0.0, 5.0, 0.1) var prototype_angular_damping: float = 1.5
-
 @onready var pilot_zone: Area3D = $PilotZone
 @onready var seat_anchor: Marker3D = $CockpitSeat
 @onready var cockpit_camera: Camera3D = $CockpitSeat/CockpitCamera
@@ -19,13 +14,13 @@ var _active_pilot: Node = null
 
 
 func _ready() -> void:
-	# Use Godot's normal rigid-body integration. Keep linear inertia intact,
-	# while applying modest passive damping to angular velocity until the FCC
-	# rate controller is implemented and tuned in its own milestone.
+	# Angular damping belongs to the FCC in assisted mode. With assistance off,
+	# rotational inertia is preserved just like linear inertia in space.
 	freeze = false
 	can_sleep = true
 	sleeping = false
-	angular_damp = prototype_angular_damping
+	angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
+	angular_damp = 0.0
 	pilot_zone.body_entered.connect(_on_pilot_zone_body_entered)
 	pilot_zone.body_exited.connect(_on_pilot_zone_body_exited)
 

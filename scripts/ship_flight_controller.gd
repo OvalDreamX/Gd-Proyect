@@ -2,8 +2,8 @@ extends Node
 class_name ShipFlightController
 
 ## Ship-owned input and field-state controller.
-## Converts keyboard/mouse events into commanded values, while
-## RepulsorliftSystem owns all physical force calculations and applications.
+## FlightControlComputer interprets pilot intent; RepulsorliftSystem remains
+## the only component that calculates and applies physical flight forces.
 
 enum FieldState {
 	OFF,
@@ -37,6 +37,7 @@ const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 @onready var _camera_controller: ShipCameraController = get_node("../CameraController") as ShipCameraController
 @onready var _repulsorlift_system: RepulsorliftSystem = get_node("../RepulsorliftSystem") as RepulsorliftSystem
+@onready var _fcc: FlightControlComputer = get_node("../FlightControlComputer") as FlightControlComputer
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -48,7 +49,7 @@ var _field_power_output: float = 0.0
 var _vector_distribution_degrees: float = DEFAULT_VECTOR_DISTRIBUTION_DEGREES
 var _vector_distribution_actual_degrees: float = DEFAULT_VECTOR_DISTRIBUTION_DEGREES
 var _yaw_command: float = 0.0
-# x = roll, y = pitch. These are normalized pilot commands, not ship attitude.
+# x = roll, y = pitch. These are persistent pilot requests, not ship attitude.
 var _roll_command: float = 0.0
 var _pitch_command: float = 0.0
 var _require_neutral_controls: bool = false
@@ -57,11 +58,20 @@ var _debug_interaction_mode: bool = false
 var _debug_overview_enabled: bool = false
 var _pilot_was_ready: bool = false
 var _telemetry_time_remaining: float = 0.0
+var _fcc_snapshot: Dictionary = {}
 
 
 func _ready() -> void:
-	if _ship == null or _camera_controller == null or _repulsorlift_system == null:
-		push_error("ShipFlightController requires ShipInteractable, CameraController, and RepulsorliftSystem.")
+	if (
+		_ship == null
+		or _camera_controller == null
+		or _repulsorlift_system == null
+		or _fcc == null
+	):
+		push_error(
+			"ShipFlightController requires ShipInteractable, CameraController, "
+			+ "RepulsorliftSystem, and FlightControlComputer."
+		)
 		set_process(false)
 		set_process_unhandled_input(false)
 		set_physics_process(false)
@@ -72,6 +82,7 @@ func _ready() -> void:
 	add_child(_hud)
 	_hud.visible = false
 	_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
+	_update_fcc_snapshot(false)
 	_publish_telemetry()
 
 
@@ -87,6 +98,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("ship_field_toggle") and not _debug_interaction_mode:
 		_toggle_field_state()
+		get_viewport().set_input_as_handled()
+		return
+
+	if event.is_action_pressed("ship_assist_toggle") and not _debug_interaction_mode:
+		_fcc.set_assistance_enabled(not _fcc.assistance_enabled)
+		_update_fcc_snapshot(
+			_field_state == FieldState.ONLINE and _field_power_output > 0.0001 and not _ship.freeze
+		)
+		_publish_telemetry()
 		get_viewport().set_input_as_handled()
 		return
 
@@ -187,7 +207,10 @@ func _physics_process(delta: float) -> void:
 	if not pilot_ready:
 		if _field_state != FieldState.OFF:
 			_turn_field_off()
-		_repulsorlift_system.apply_flight_control_forces(false, 0.0, DEFAULT_VECTOR_DISTRIBUTION_DEGREES, 0.0, 0.0, 0.0)
+		_update_fcc_snapshot(false)
+		_repulsorlift_system.apply_flight_control_forces(
+			false, 0.0, DEFAULT_VECTOR_DISTRIBUTION_DEGREES, 0.0, 0.0, 0.0
+		)
 		return
 
 	var telemetry_changed: bool = false
@@ -205,15 +228,22 @@ func _physics_process(delta: float) -> void:
 		_yaw_command = 0.0
 		telemetry_changed = true
 
-	# All six pilot values are now passed to the force allocator. Main vector
-	# direction is ship-relative; pitch/roll/yaw are separate vane force pairs.
+	var control_available: bool = (
+		_field_state == FieldState.ONLINE
+		and _field_power_output > 0.0001
+		and not _ship.freeze
+	)
+	_update_fcc_snapshot(control_available)
+
+	# The FCC turns pilot intent into bounded per-axis vane commands. The
+	# repulsorlift system still owns every force and torque calculation.
 	_repulsorlift_system.apply_flight_control_forces(
 		_field_state == FieldState.ONLINE,
 		_field_power_output,
 		_vector_distribution_actual_degrees,
-		_pitch_command,
-		_roll_command,
-		_yaw_command
+		float(_fcc_snapshot.get("fcc_pitch_output", 0.0)),
+		float(_fcc_snapshot.get("fcc_roll_output", 0.0)),
+		float(_fcc_snapshot.get("fcc_yaw_output", 0.0))
 	)
 
 	if telemetry_changed:
@@ -223,6 +253,20 @@ func _physics_process(delta: float) -> void:
 	if _telemetry_time_remaining <= 0.0:
 		_telemetry_time_remaining = TELEMETRY_UPDATE_INTERVAL_SECONDS
 		_publish_telemetry()
+
+
+func _update_fcc_snapshot(control_available: bool) -> void:
+	if not is_instance_valid(_fcc) or not is_instance_valid(_ship):
+		_fcc_snapshot.clear()
+		return
+	_fcc_snapshot = _fcc.calculate_control_outputs(
+			_pitch_command,
+			_roll_command,
+			_yaw_command,
+			_ship.angular_velocity,
+			_ship.global_basis,
+			control_available
+	)
 
 
 func _toggle_field_state() -> void:
@@ -241,7 +285,10 @@ func _turn_field_off() -> void:
 	_yaw_command = 0.0
 	_pitch_command = 0.0
 	_roll_command = 0.0
-	_repulsorlift_system.apply_flight_control_forces(false, 0.0, _vector_distribution_actual_degrees, 0.0, 0.0, 0.0)
+	_update_fcc_snapshot(false)
+	_repulsorlift_system.apply_flight_control_forces(
+		false, 0.0, _vector_distribution_actual_degrees, 0.0, 0.0, 0.0
+	)
 	_set_field_state(FieldState.OFF)
 
 
@@ -359,12 +406,14 @@ func _publish_telemetry() -> void:
 		"ship_position": _ship.global_position,
 		"ship_linear_velocity": _ship.linear_velocity,
 		"ship_angular_velocity": _ship.angular_velocity,
+		"ship_global_basis": _ship.global_basis,
 		"ship_is_sleeping": _ship.sleeping,
 		"center_of_mass_mode": "AUTO" if _ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO else "CUSTOM",
 		"rigid_body_frozen": _ship.freeze,
 		"physics_output_connected": true,
 		"controls_armed": not _require_neutral_controls,
 	}
+	snapshot.merge(_fcc_snapshot, true)
 	snapshot.merge(_repulsorlift_system.get_telemetry(), true)
 	_hud.update_telemetry(snapshot)
 

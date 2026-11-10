@@ -16,6 +16,8 @@ var _field_power_output_label: Label
 var _vector_label: Label
 var _vector_output_label: Label
 var _yaw_label: Label
+var _fcc_mode_label: Label
+var _fcc_output_label: Label
 var _mass_label: Label
 var _physics_label: Label
 var _pitch_roll_label: Label
@@ -81,6 +83,17 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var vane_states: Array = telemetry.get("vane_states", [])
 	var vane_contributions: Array = telemetry.get("lift_vane_contributions", [])
 
+	var fcc_assistance_enabled: bool = bool(telemetry.get("fcc_assistance_enabled", true))
+	var fcc_control_available: bool = bool(telemetry.get("fcc_control_available", false))
+	var fcc_desired_rate: Vector3 = telemetry.get("fcc_desired_rate_local_rad_s", Vector3.ZERO)
+	var fcc_actual_rate: Vector3 = telemetry.get("fcc_actual_rate_local_rad_s", Vector3.ZERO)
+	var fcc_rate_error: Vector3 = telemetry.get("fcc_rate_error_local_rad_s", Vector3.ZERO)
+	var fcc_output: Vector3 = telemetry.get("fcc_control_output_by_axis", Vector3.ZERO)
+	var fcc_any_saturated: bool = bool(telemetry.get("fcc_any_axis_saturated", false))
+	var fcc_pitch_saturated: bool = bool(telemetry.get("fcc_pitch_saturated", false))
+	var fcc_roll_saturated: bool = bool(telemetry.get("fcc_roll_saturated", false))
+	var fcc_yaw_saturated: bool = bool(telemetry.get("fcc_yaw_saturated", false))
+
 	_field_state_label.text = "FIELD STATE       %s" % field_state
 	match field_state:
 		"OFF":
@@ -92,7 +105,9 @@ func update_telemetry(telemetry: Dictionary) -> void:
 		"ONLINE":
 			_field_state_label.add_theme_color_override("font_color", COLOR_ONLINE)
 			if bool(telemetry.get("controls_armed", true)):
-				_instruction_label.text = "FIELD ONLINE  |  Q/E VECTOR + PITCH / ROLL / YAW FORCE PAIRS ACTIVE"
+				_instruction_label.text = (
+					"FIELD ONLINE  |  MOUSE REQUESTS PITCH / ROLL RATE  |  A/D YAW"
+				)
 			else:
 				_instruction_label.text = "RELEASE W/S, Q/E AND A/D TO ARM THE COMMAND INPUTS"
 		_:
@@ -104,6 +119,21 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_vector_label.text = "VECTOR SETPOINT      " + String.num(vector_command_degrees, 1) + "°"
 	_vector_output_label.text = "VECTOR ACTUAL        " + String.num(vector_actual_degrees, 1) + "°"
 	_yaw_label.text = "YAW COMMAND      %s" % String.num(yaw, 2)
+
+	_fcc_mode_label.text = "FCC ASSIST        %s" % (
+		"ON / RATE CONTROL" if fcc_assistance_enabled else "OFF / DIRECT VANES"
+	)
+	_fcc_mode_label.add_theme_color_override(
+		"font_color", COLOR_ONLINE if fcc_assistance_enabled else COLOR_WARNING
+	)
+	_fcc_output_label.text = "FCC OUTPUT P/R/Y  %+.2f / %+.2f / %+.2f" % [
+		fcc_output.x, fcc_output.z, fcc_output.y
+	]
+	if fcc_any_saturated:
+		_fcc_output_label.add_theme_color_override("font_color", COLOR_WARNING)
+	else:
+		_fcc_output_label.add_theme_color_override("font_color", COLOR_TEXT)
+
 	_mass_label.text = "SHIP MASS         %s kg" % String.num(mass_kg, 0)
 	_pitch_roll_label.text = "PITCH %+.2f    ROLL %+.2f" % [pitch, roll]
 	_camera_mode_label.text = "VIEW %s    INPUT %s" % [camera_view, input_mode]
@@ -136,11 +166,46 @@ func update_telemetry(telemetry: Dictionary) -> void:
 
 	_debug_overview_panel.visible = debug_enabled
 	if debug_enabled:
+		var to_degrees: float = 180.0 / PI
+		var saturation_text: String = "NONE"
+		if fcc_any_saturated:
+			var saturated_axes: PackedStringArray = PackedStringArray()
+			if fcc_pitch_saturated:
+				saturated_axes.append("PITCH")
+			if fcc_roll_saturated:
+				saturated_axes.append("ROLL")
+			if fcc_yaw_saturated:
+				saturated_axes.append("YAW")
+			saturation_text = ", ".join(saturated_axes)
+
 		var debug_text: String = (
 			"VIEW: %s     INPUT: %s\n" % [camera_view, input_mode]
 			+ "VIRTUAL PITCH: %+.3f     ROLL: %+.3f\n" % [pitch, roll]
 			+ "CAMERA YAW: %+.1f°     PITCH: %+.1f°\n" % [camera_yaw, camera_pitch]
 			+ "DEBUG UI INTERACTION: %s\n" % ("ACTIVE" if debug_interaction else "INACTIVE")
+			+ "FCC MODE: %s     CONTROL AVAILABLE: %s\n" % [
+				"ASSISTED RATE CONTROL" if fcc_assistance_enabled else "DIRECT VANE CONTROL",
+				"YES" if fcc_control_available else "NO",
+			]
+			+ "FCC RATE TARGET P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
+				fcc_desired_rate.x * to_degrees,
+				fcc_desired_rate.z * to_degrees,
+				fcc_desired_rate.y * to_degrees,
+			]
+			+ "FCC RATE ACTUAL P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
+				fcc_actual_rate.x * to_degrees,
+				fcc_actual_rate.z * to_degrees,
+				fcc_actual_rate.y * to_degrees,
+			]
+			+ "FCC RATE ERROR P/R/Y: %+.1f / %+.1f / %+.1f deg/s\n" % [
+				fcc_rate_error.x * to_degrees,
+				fcc_rate_error.z * to_degrees,
+				fcc_rate_error.y * to_degrees,
+			]
+			+ "FCC OUTPUT P/R/Y: %+.2f / %+.2f / %+.2f\n" % [
+				fcc_output.x, fcc_output.z, fcc_output.y,
+			]
+			+ "FCC SATURATION: %s\n" % saturation_text
 			+ "WORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
 			+ "LINEAR VEL: (%.3f, %.3f, %.3f) m/s\n" % [linear_velocity.x, linear_velocity.y, linear_velocity.z]
 			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
@@ -188,7 +253,7 @@ func _build_hud() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	var system_panel := _create_panel(root, Vector2(20.0, 20.0), Vector2(360.0, 232.0))
+	var system_panel := _create_panel(root, Vector2(20.0, 20.0), Vector2(390.0, 270.0))
 	var system_content := _create_panel_content(system_panel)
 	_add_label(system_content, "REPULSORLIFT CONTROL", 16, COLOR_ACCENT)
 	_field_state_label = _add_label(system_content, "FIELD STATE       OFF", 15, COLOR_MUTED)
@@ -198,6 +263,8 @@ func _build_hud() -> void:
 	_vector_output_label = _add_label(system_content, "VECTOR ACTUAL        0.0°", 14, COLOR_TEXT)
 	_add_label(system_content, "0° MAIN  |  90° LIFT  |  110° COMBINED BRAKE", 11, COLOR_MUTED)
 	_yaw_label = _add_label(system_content, "YAW COMMAND      +0.00", 14, COLOR_TEXT)
+	_fcc_mode_label = _add_label(system_content, "FCC ASSIST        ON / RATE CONTROL", 13, COLOR_ONLINE)
+	_fcc_output_label = _add_label(system_content, "FCC OUTPUT P/R/Y  +0.00 / +0.00 / +0.00", 12, COLOR_TEXT)
 
 	var status_panel := _create_anchored_panel(root)
 	var status_content := _create_panel_content(status_panel)
@@ -230,11 +297,11 @@ func _build_hud() -> void:
 	reticle.offset_bottom = 12.0
 	root.add_child(reticle)
 
-	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(520.0, 410.0))
+	_debug_overview_panel = _create_panel(root, Vector2(20.0, 305.0), Vector2(600.0, 400.0))
 	_debug_overview_panel.name = "DebugOverviewPanel"
 	_debug_overview_panel.visible = false
 	var debug_content := _create_panel_content(_debug_overview_panel)
-	_add_label(debug_content, "FLIGHT / VANE DEBUG OVERVIEW", 13, COLOR_ACCENT)
+	_add_label(debug_content, "FLIGHT / FCC / VANE DEBUG OVERVIEW", 13, COLOR_ACCENT)
 	_debug_overview_label = _add_label(debug_content, "VIEW: COCKPIT", 12, COLOR_TEXT)
 
 	var instruction_panel := PanelContainer.new()
@@ -243,8 +310,8 @@ func _build_hud() -> void:
 	instruction_panel.anchor_right = 0.5
 	instruction_panel.anchor_top = 1.0
 	instruction_panel.anchor_bottom = 1.0
-	instruction_panel.offset_left = -390.0
-	instruction_panel.offset_right = 390.0
+	instruction_panel.offset_left = -430.0
+	instruction_panel.offset_right = 430.0
 	instruction_panel.offset_top = -64.0
 	instruction_panel.offset_bottom = -18.0
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -254,8 +321,8 @@ func _build_hud() -> void:
 	var instruction_content := _create_panel_content(instruction_panel)
 	_instruction_label = _add_label(
 		instruction_content,
-		"F FIELD  |  W/S POWER  |  Q/E VECTOR  |  A/D YAW  |  MOUSE P/R  |  C VIEW  |  RMB LOOK  |  SHIFT UI  |  F3 DEBUG",
-		11,
+		"F FIELD  |  W/S POWER  |  Q/E VECTOR  |  A/D YAW  |  MOUSE P/R RATE  |  V FCC ASSIST  |  C VIEW  |  RMB LOOK  |  SHIFT UI  |  F3 DEBUG",
+		10,
 		COLOR_TEXT
 	)
 	_instruction_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -279,7 +346,7 @@ func _create_anchored_panel(parent: Control) -> PanelContainer:
 	panel.offset_left = -380.0
 	panel.offset_right = -20.0
 	panel.offset_top = 20.0
-	panel.offset_bottom = 410.0
+	panel.offset_bottom = 440.0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", _make_panel_style())
 	parent.add_child(panel)
