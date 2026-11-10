@@ -5,7 +5,7 @@ extends SceneTree
 ## godot --headless --path . --script res://tests/flight_path_marker_test.gd
 
 const HUD_OVERLAY_SCRIPT = preload("res://scripts/flight_hud_overlay.gd")
-const CENTER := Vector2(640.0, 348.0)
+const CENTER := Vector2(640.0, 360.0)
 const EPSILON: float = 0.001
 
 var _checks: int = 0
@@ -24,13 +24,16 @@ func _run_tests() -> void:
 	var aligned_position: Vector2 = aligned.get("position", Vector2.ZERO)
 	_expect_near_vector(aligned_position, CENTER, EPSILON, "Aligned velocity places the marker on the nose reference")
 
-	# The active camera basis, not the ship body forward axis, is the projection reference.
-	var yawed_view_basis := Basis(Vector3.UP, deg_to_rad(90.0))
-	var camera_aligned: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
-		Vector3(-30.0, 0.0, 0.0), yawed_view_basis, CENTER
+	# The combiner is ship-mounted, so marker projection uses the measured ship
+	# attitude. Camera head-look is deliberately not an input to this function.
+	var ship_reference_basis := Basis.IDENTITY
+	var head_look_basis := Basis(Vector3.UP, deg_to_rad(90.0))
+	var head_look_independent: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
+		Vector3(0.0, 0.0, -30.0), ship_reference_basis, CENTER
 	)
-	_expect(bool(camera_aligned.get("visible", false)), "World velocity remains visible after camera-look rotation")
-	_expect_near_vector(Vector2(camera_aligned.get("position", Vector2.ZERO)), CENTER, EPSILON, "Flight-path vector is projected relative to the active view")
+	_expect(bool(head_look_independent.get("visible", false)), "Flight-path marker remains valid while the pilot looks away")
+	_expect_near_vector(Vector2(head_look_independent.get("position", Vector2.ZERO)), CENTER, EPSILON, "Marker alignment is measured against ship boresight, not camera head-look")
+	_expect(head_look_basis != ship_reference_basis, "Head-look orientation is independent from ship instrument attitude")
 
 	var right_drift: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
 		Vector3(8.0, 0.0, -30.0), Basis.IDENTITY, CENTER
@@ -54,12 +57,24 @@ func _run_tests() -> void:
 	)
 	_expect(bool(clipped.get("clipped", false)), "Large sideslip is clamped to the visible HUD field")
 	var clipped_position: Vector2 = clipped.get("position", CENTER)
+	var projected_limit: float = 1280.0 * 0.90 / 2.78 * tan(deg_to_rad(23.0))
 	_expect_near(
 		clipped_position.x,
-		CENTER.x + 23.0 * 4.0,
+		CENTER.x + projected_limit,
 		EPSILON,
-		"Clipped marker stops at the configured lateral display limit"
+		"Clipped marker stops at the angularly projected windshield limit"
 	)
+
+	# The pitch ladder uses perspective projection onto the windshield rather
+	# than a linear approximation, so each mark corresponds to its true angle.
+	var zero_pitch_offset: float = HUD_OVERLAY_SCRIPT.calculate_pitch_mark_offset_pixels(0.0, 0.0)
+	var ten_degree_offset: float = HUD_OVERLAY_SCRIPT.calculate_pitch_mark_offset_pixels(10.0, 0.0)
+	var twenty_degree_offset: float = HUD_OVERLAY_SCRIPT.calculate_pitch_mark_offset_pixels(20.0, 0.0)
+	var matching_mark_offset: float = HUD_OVERLAY_SCRIPT.calculate_pitch_mark_offset_pixels(10.0, 10.0)
+	_expect_near(zero_pitch_offset, 0.0, EPSILON, "Zero-degree pitch mark aligns with the aircraft reference at level attitude")
+	_expect(ten_degree_offset > 0.0, "Nose-up pitch moves the horizon reference down the windshield")
+	_expect_near(matching_mark_offset, 0.0, EPSILON, "A 10-degree pitch attitude aligns the +10-degree ladder mark with the reference")
+	_expect(twenty_degree_offset > ten_degree_offset * 2.0, "Angular ladder spacing follows tangent projection, not a linear pixel scale")
 
 	var stationary: Dictionary = HUD_OVERLAY_SCRIPT.calculate_flight_path_marker(
 		Vector3.ZERO, Basis.IDENTITY, CENTER

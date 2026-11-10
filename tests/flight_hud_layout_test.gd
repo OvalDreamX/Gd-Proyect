@@ -14,19 +14,36 @@ func _initialize() -> void:
 
 
 func _run_tests() -> void:
+	var ship := RigidBody3D.new()
+	ship.name = "TestShip"
+	root.add_child(ship)
+	var flight_controller := Node.new()
+	flight_controller.name = "FlightController"
+	ship.add_child(flight_controller)
 	var hud = FLIGHT_HUD_SCRIPT.new()
 	hud.name = "TestFlightHUD"
-	root.add_child(hud)
+	flight_controller.add_child(hud)
 	await process_frame
 
 	var flight_display := hud.get_node_or_null("CockpitFlightDisplay") as Control
 	var debug_panel := hud.get_node_or_null("F3DiagnosticsPanel") as PanelContainer
 	var settings_overlay := hud.get_node_or_null("DisplaySettingsOverlay") as Control
-	_expect(flight_display != null, "Cockpit flight display is created")
+	var windshield_viewport := hud.get_node_or_null("WindshieldHUDViewport") as SubViewport
+	var windshield_display: Control = null
+	if windshield_viewport != null:
+		windshield_display = windshield_viewport.get_node_or_null("WindshieldFlightDisplay") as Control
+	var windshield_surface := ship.get_node_or_null("CockpitWindshieldProjection/WindshieldHUDSurface") as MeshInstance3D
+	_expect(flight_display != null, "Screen-fixed side gauges and controls viewer are created")
+	_expect(windshield_viewport != null, "Dedicated transparent windshield HUD viewport is created")
+	_expect(windshield_display != null, "Central HUD is rendered independently from the side display")
+	_expect(windshield_surface != null, "HUD texture is projected onto a physical ship-mounted windshield surface")
+	_expect(flight_display != null and flight_display.get("render_mode") == &"SIDES", "2D display is restricted to the side instruments")
+	_expect(windshield_display != null and windshield_display.get("render_mode") == &"WINDSHIELD", "3D windshield carries the central flight symbology")
 	_expect(debug_panel != null, "F3 diagnostics panel is created")
 	_expect(settings_overlay != null, "Display settings overlay is created")
-	if flight_display == null or debug_panel == null or settings_overlay == null:
+	if flight_display == null or debug_panel == null or settings_overlay == null or windshield_viewport == null or windshield_display == null or windshield_surface == null:
 		hud.queue_free()
+		ship.queue_free()
 		quit(1)
 		return
 
@@ -44,6 +61,21 @@ func _run_tests() -> void:
 		"ship_position": Vector3(0.0, 120.0, 0.0),
 		"ship_linear_velocity": Vector3(0.0, 3.0, -30.0),
 		"ship_global_basis": Basis.IDENTITY,
+		"instrument_attitude_basis_world": Basis.IDENTITY,
+		"instrument_pitch_degrees": 0.0,
+		"instrument_bank_degrees": 0.0,
+		"instrument_heading_degrees": 0.0,
+		"instrument_heading_valid": true,
+		"instrument_velocity_world": Vector3(0.0, 3.0, -30.0),
+		"instrument_speed_mps": 30.15,
+		"instrument_speed_label": "AIRSPEED",
+		"instrument_vertical_speed_mps": 3.0,
+		"instrument_altitude_m": 120.0,
+		"instrument_attitude_valid": true,
+		"instrument_velocity_valid": true,
+		"instrument_altitude_valid": true,
+		"instrument_local_up_world": Vector3.UP,
+		"instrument_channel_status": {"ATTITUDE": "NOMINAL", "HEADING": "NOMINAL", "VELOCITY": "NOMINAL", "ALTITUDE": "NOMINAL"},
 		"fcc_assistance_enabled": true,
 		"atmosphere_enabled": true,
 		"atmosphere_altitude_m": 120.0,
@@ -62,25 +94,31 @@ func _run_tests() -> void:
 		"fcc_yaw_input_conditioned": 0.3,
 	}
 
+	hud.set_cockpit_active(true)
 	hud.update_telemetry(sample_telemetry)
-	_expect(flight_display.visible, "Cockpit HUD is visible in cockpit view when F3 is off")
+	_expect(flight_display.visible, "Screen-fixed side instruments are visible in cockpit view when F3 is off")
+	_expect(windshield_surface.visible, "Windshield projection is visible while the pilot is in cockpit view")
 	_expect(not debug_panel.visible, "Diagnostics remain hidden during normal flight")
 	var displayed_telemetry: Dictionary = flight_display.get("_telemetry")
 	_expect(is_equal_approx(float(displayed_telemetry.get("field_power_output", -1.0)), 0.65), "HUD receives actual field output for the live gauge")
 	_expect(is_equal_approx(float(displayed_telemetry.get("field_power_command", -1.0)), 0.8), "HUD receives the separate field-power setpoint")
+	var windshield_telemetry: Dictionary = windshield_display.get("_telemetry")
+	_expect(is_equal_approx(float(windshield_telemetry.get("instrument_heading_degrees", -1.0)), 0.0), "Central HUD receives instrument heading from the sensor data packet")
 
 	var debug_telemetry: Dictionary = sample_telemetry.duplicate(true)
 	debug_telemetry["debug_overview_enabled"] = true
 	hud.update_telemetry(debug_telemetry)
-	_expect(not flight_display.visible, "Normal HUD is hidden while F3 diagnostics are active")
+	_expect(not flight_display.visible, "Normal side HUD is hidden while F3 diagnostics are active")
+	_expect(not windshield_surface.visible, "Windshield projection is hidden while F3 diagnostics are active")
 	_expect(debug_panel.visible, "F3 opens the diagnostics page")
 	var diagnostics_view := debug_panel.find_child("DiagnosticsText", true, false) as TextEdit
 	_expect(diagnostics_view != null, "F3 diagnostics use a dedicated scrollable text viewport")
 	_expect(diagnostics_view != null and diagnostics_view.custom_minimum_size.y >= 200.0, "F3 diagnostics text viewport has a non-zero layout height")
-	_expect(diagnostics_view != null and diagnostics_view.text.contains("Power setpoint/output"), "F3 page contains the former flight telemetry")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("Main-vector throttle setpoint/output"), "F3 page contains the former flight telemetry")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("ATMOSPHERE / DRAG"), "F3 page includes atmospheric density and drag diagnostics")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("Input shaping"), "F3 page reports FCC deadzone and curve settings")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("Mean wind"), "F3 page reports mean wind and turbulence")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("FLIGHT SENSOR BUS"), "F3 page exposes independent instrument-channel health")
 
 	var external_debug_telemetry: Dictionary = debug_telemetry.duplicate(true)
 	external_debug_telemetry["camera_view"] = "EXTERNAL"
@@ -92,7 +130,8 @@ func _run_tests() -> void:
 	external_telemetry["camera_view"] = "EXTERNAL"
 	external_telemetry["debug_overview_enabled"] = false
 	hud.update_telemetry(external_telemetry)
-	_expect(not flight_display.visible, "Cockpit HUD is hidden in external camera view")
+	_expect(not flight_display.visible, "Screen-fixed side HUD is hidden in external camera view")
+	_expect(not windshield_surface.visible, "Windshield projection is not visible from the external camera")
 	_expect(not debug_panel.visible, "F3 diagnostics close when debug mode is disabled")
 
 	hud.toggle_display_settings()
@@ -104,6 +143,7 @@ func _run_tests() -> void:
 
 	print("Flight HUD layout tests: %d checks, %d failures." % [_checks, _failures])
 	hud.queue_free()
+	ship.queue_free()
 	quit(1 if _failures > 0 else 0)
 
 

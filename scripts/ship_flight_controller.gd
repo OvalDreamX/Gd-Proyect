@@ -39,6 +39,7 @@ const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 1.0 / 30.0
 @onready var _repulsorlift_system: RepulsorliftSystem = get_node("../RepulsorliftSystem") as RepulsorliftSystem
 @onready var _fcc: FlightControlComputer = get_node("../FlightControlComputer") as FlightControlComputer
 @onready var _atmospheric_flight_model: AtmosphericFlightModel = get_node_or_null("../AtmosphericFlightModel") as AtmosphericFlightModel
+@onready var _flight_sensor_suite: Node = get_node_or_null("../FlightSensorSuite")
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -89,6 +90,7 @@ func _ready() -> void:
 	_hud.name = "FlightHUD"
 	add_child(_hud)
 	_hud.visible = false
+	_hud.set_cockpit_active(false)
 	_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
 	_update_fcc_snapshot(false)
 	_publish_telemetry()
@@ -212,6 +214,7 @@ func _physics_process(delta: float) -> void:
 	var pilot_ready: bool = _ship.is_pilot_ready()
 	if _hud.visible != pilot_ready:
 		_hud.visible = pilot_ready
+		_hud.set_cockpit_active(pilot_ready)
 
 	if pilot_ready and not _pilot_was_ready:
 		_pilot_was_ready = true
@@ -449,6 +452,8 @@ func _publish_telemetry() -> void:
 	snapshot.merge(_repulsorlift_system.get_telemetry(), true)
 	if is_instance_valid(_atmospheric_flight_model):
 		snapshot.merge(_atmospheric_flight_model.get_telemetry(), true)
+	if is_instance_valid(_flight_sensor_suite):
+		snapshot.merge(_flight_sensor_suite.get_instrument_snapshot(), true)
 	_hud.update_telemetry(snapshot)
 
 

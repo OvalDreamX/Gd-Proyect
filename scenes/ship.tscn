@@ -1,4 +1,4 @@
-[gd_scene load_steps=26 format=3]
+[gd_scene load_steps=27 format=3]
 
 [ext_resource type="Script" path="res://scripts/ship_interactable.gd" id="1_ship"]
 [ext_resource type="Script" path="res://scripts/ship_flight_controller.gd" id="2_flight_controller"]
@@ -15,6 +15,7 @@
 [ext_resource type="Script" path="res://scripts/force_vector_debug.gd" id="13_force_debug"]
 [ext_resource type="Script" path="res://scripts/flight_control_computer.gd" id="14_fcc"]
 [ext_resource type="Script" path="res://scripts/atmospheric_flight_model.gd" id="15_atmospheric_flight_model"]
+[ext_resource type="Script" path="res://scripts/flight_sensor_suite.gd" id="16_flight_sensor_suite"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_hull"]
 size = Vector3(3.6, 1.5, 5.2)
@@ -143,8 +144,11 @@ script = ExtResource("13_force_debug")
 [node name="FlightControlComputer" type="Node" parent="."]
 script = ExtResource("14_fcc")
 
-[node name="FlightController" type="Node" parent="."]
-script = ExtResource("2_flight_controller")
-
 [node name="AtmosphericFlightModel" type="Node" parent="."]
 script = ExtResource("15_atmospheric_flight_model")
+
+[node name="FlightSensorSuite" type="Node" parent="."]
+script = ExtResource("16_flight_sensor_suite")
+
+[node name="FlightController" type="Node" parent="."]
+script = ExtResource("2_flight_controller")
