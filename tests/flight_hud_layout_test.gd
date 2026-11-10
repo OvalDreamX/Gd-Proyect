@@ -21,9 +21,11 @@ func _run_tests() -> void:
 
 	var flight_display := hud.get_node_or_null("CockpitFlightDisplay") as Control
 	var debug_panel := hud.get_node_or_null("F3DiagnosticsPanel") as PanelContainer
+	var settings_overlay := hud.get_node_or_null("DisplaySettingsOverlay") as Control
 	_expect(flight_display != null, "Cockpit flight display is created")
 	_expect(debug_panel != null, "F3 diagnostics panel is created")
-	if flight_display == null or debug_panel == null:
+	_expect(settings_overlay != null, "Display settings overlay is created")
+	if flight_display == null or debug_panel == null or settings_overlay == null:
 		hud.queue_free()
 		quit(1)
 		return
@@ -72,6 +74,13 @@ func _run_tests() -> void:
 	hud.update_telemetry(external_telemetry)
 	_expect(not flight_display.visible, "Cockpit HUD is hidden in external camera view")
 	_expect(not debug_panel.visible, "F3 diagnostics close when debug mode is disabled")
+
+	hud.toggle_display_settings()
+	_expect(hud.is_display_settings_open(), "F10 display settings open state is enabled")
+	_expect(settings_overlay.visible, "Display settings overlay is visible when opened")
+	hud.close_display_settings()
+	_expect(not hud.is_display_settings_open(), "Display settings close cleanly")
+	_expect(not settings_overlay.visible, "Display settings overlay is hidden when closed")
 
 	print("Flight HUD layout tests: %d checks, %d failures." % [_checks, _failures])
 	hud.queue_free()

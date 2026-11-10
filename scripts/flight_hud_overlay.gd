@@ -24,9 +24,15 @@ func _draw() -> void:
 	if _telemetry.is_empty() or size.x <= 0.0 or size.y <= 0.0:
 		return
 
-	var scale_factor: float = minf(size.x / BASE_WIDTH, size.y / BASE_HEIGHT)
-	var draw_size := Vector2(BASE_WIDTH, BASE_HEIGHT) * scale_factor
-	var draw_offset := (size - draw_size) * 0.5
+	var fit_scale: float = minf(size.x / BASE_WIDTH, size.y / BASE_HEIGHT)
+	var ui_scale: float = 1.0
+	var display_settings: Node = get_node_or_null("/root/DisplaySettings")
+	if display_settings != null and display_settings.has_method("get_hud_scale"):
+		ui_scale = float(display_settings.call("get_hud_scale"))
+	var scale_factor: float = fit_scale * clampf(ui_scale, 0.8, 1.0)
+	var logical_size: Vector2 = size / maxf(scale_factor, 0.001)
+	var extra_space: Vector2 = logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)
+	var draw_offset := extra_space * 0.5
 	draw_set_transform(draw_offset, 0.0, Vector2.ONE * scale_factor)
 
 	var font: Font = ThemeDB.fallback_font
@@ -48,14 +54,16 @@ func _draw() -> void:
 		360.0
 	)
 
+	var left_gauge_x: float = 88.0 - extra_space.x * 0.5
+	var right_gauge_x: float = 1178.0 + extra_space.x * 0.5
 	_draw_side_gauge(
-		font, 88.0, "FIELD POWER", "OUTPUT",
+		font, left_gauge_x, "FIELD POWER", "OUTPUT",
 		float(_telemetry.get("field_power_output", 0.0)),
 		float(_telemetry.get("field_power_command", 0.0)),
 		1.0, "%"
 	)
 	_draw_side_gauge(
-		font, 1178.0, "VECTOR ANGLE", "ACTUATOR",
+		font, right_gauge_x, "VECTOR ANGLE", "ACTUATOR",
 		float(_telemetry.get("vector_distribution_actual_degrees", 90.0)),
 		float(_telemetry.get("vector_distribution_degrees", 90.0)),
 		110.0, "°"
@@ -276,7 +284,7 @@ func _draw_bottom_guidance(font: Font) -> void:
 	_draw_text(
 		font,
 		Vector2(350.0, 711.0),
-		"F FIELD   W/S POWER   Q/E VECTOR   MOUSE P/R   A/D RUDDER   V FCC ASSIST   C VIEW   RMB LOOK   F3 DIAGNOSTICS",
+		"F FIELD   W/S POWER   Q/E VECTOR   MOUSE P/R   A/D RUDDER   V FCC   C VIEW   RMB LOOK   F3 DEBUG   F10 DISPLAY",
 		9,
 		COLOR_DIM,
 		HORIZONTAL_ALIGNMENT_CENTER,

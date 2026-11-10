@@ -6,8 +6,8 @@
 config_version=5
 
 [application]
-config/name="Space Trucker - Phase 2G FCC Prototype"
-config/description="Ship-owned repulsorlift flight control with bounded FCC angular-rate assistance."
+config/name="Space Trucker - Phase 2I Display Prototype"
+config/description="Responsive cockpit HUD with persistent window and display preferences."
 run/main_scene="res://scenes/test_range.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
@@ -16,7 +16,14 @@ window/size/viewport_width=1280
 window/size/viewport_height=720
 window/size/window_width_override=1280
 window/size/window_height_override=720
+window/size/resizable=true
+window/size/min_width=800
+window/size/min_height=450
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[autoload]
+DisplaySettings="*res://scripts/display_settings.gd"
 
 [input]
 move_forward={

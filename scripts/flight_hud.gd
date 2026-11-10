@@ -14,11 +14,20 @@ const COLOR_ACCENT: Color = Color(0.30, 0.83, 0.90, 1.0)
 var _flight_display: Control
 var _debug_panel: PanelContainer
 var _debug_text_label: Label
+var _settings_overlay: Control
+var _display_mode_option: OptionButton
+var _resolution_option: OptionButton
+var _hud_scale_option: OptionButton
+var _resolution_label: Label
+var _settings_hint: Label
+var _settings_open: bool = false
+var _previous_mouse_mode: int = Input.MOUSE_MODE_VISIBLE
 
 
 func _ready() -> void:
 	layer = 20
 	_build_hud()
+	_build_display_settings_overlay()
 	visible = false
 
 
@@ -199,6 +208,225 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 
 	_debug_text_label.text = "\n".join(lines)
 	_debug_text_label.custom_minimum_size.y = maxf(600.0, float(lines.size()) * 19.0)
+
+
+func is_display_settings_open() -> bool:
+	return _settings_open
+
+
+func toggle_display_settings() -> void:
+	if _settings_open:
+		close_display_settings()
+		return
+
+	_previous_mouse_mode = Input.mouse_mode
+	_populate_display_settings()
+	_settings_open = true
+	_settings_overlay.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func close_display_settings() -> void:
+	if not _settings_open:
+		return
+	_settings_open = false
+	_settings_overlay.visible = false
+	Input.mouse_mode = _previous_mouse_mode
+
+
+func _build_display_settings_overlay() -> void:
+	_settings_overlay = Control.new()
+	_settings_overlay.name = "DisplaySettingsOverlay"
+	_settings_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_settings_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_settings_overlay.z_index = 100
+	_settings_overlay.visible = false
+	add_child(_settings_overlay)
+
+	var backdrop := ColorRect.new()
+	backdrop.name = "Backdrop"
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.005, 0.012, 0.018, 0.86)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_settings_overlay.add_child(backdrop)
+
+	var center := CenterContainer.new()
+	center.name = "CenterContainer"
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_settings_overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "SettingsPanel"
+	panel.custom_minimum_size = Vector2(500.0, 360.0)
+	panel.add_theme_stylebox_override("panel", _make_panel_style())
+	center.add_child(panel)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 12)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_child(content)
+
+	var title := Label.new()
+	title.text = "DISPLAY SETTINGS"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", COLOR_ACCENT)
+	content.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "F10 or ESC closes this panel. Changes are saved automatically."
+	subtitle.add_theme_font_size_override("font_size", 11)
+	subtitle.add_theme_color_override("font_color", COLOR_MUTED)
+	content.add_child(subtitle)
+
+	var divider := HSeparator.new()
+	content.add_child(divider)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 14)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_child(grid)
+
+	var mode_label := Label.new()
+	mode_label.text = "WINDOW MODE"
+	mode_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(mode_label)
+	_display_mode_option = OptionButton.new()
+	_display_mode_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_display_mode_option.add_item("Windowed", 0)
+	_display_mode_option.add_item("Borderless Fullscreen", 1)
+	_display_mode_option.add_item("Exclusive Fullscreen", 2)
+	_display_mode_option.item_selected.connect(_on_display_mode_selected)
+	grid.add_child(_display_mode_option)
+
+	_resolution_label = Label.new()
+	_resolution_label.text = "WINDOW RESOLUTION"
+	_resolution_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(_resolution_label)
+	_resolution_option = OptionButton.new()
+	_resolution_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(_resolution_option)
+
+	var scale_label := Label.new()
+	scale_label.text = "HUD SCALE"
+	scale_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(scale_label)
+	_hud_scale_option = OptionButton.new()
+	_hud_scale_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hud_scale_option.add_item("80%", 80)
+	_hud_scale_option.add_item("90%", 90)
+	_hud_scale_option.add_item("100%", 100)
+	grid.add_child(_hud_scale_option)
+
+	_settings_hint = Label.new()
+	_settings_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_settings_hint.custom_minimum_size.y = 42.0
+	_settings_hint.add_theme_font_size_override("font_size", 11)
+	_settings_hint.add_theme_color_override("font_color", COLOR_MUTED)
+	content.add_child(_settings_hint)
+
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.add_theme_constant_override("separation", 10)
+	content.add_child(buttons)
+
+	var close_button := Button.new()
+	close_button.text = "CANCEL"
+	close_button.custom_minimum_size = Vector2(112.0, 36.0)
+	close_button.pressed.connect(close_display_settings)
+	buttons.add_child(close_button)
+
+	var apply_button := Button.new()
+	apply_button.text = "APPLY"
+	apply_button.custom_minimum_size = Vector2(112.0, 36.0)
+	apply_button.pressed.connect(_apply_display_settings_from_ui)
+	buttons.add_child(apply_button)
+
+
+func _populate_display_settings() -> void:
+	var manager: Node = get_node_or_null("/root/DisplaySettings")
+	var current_mode: String = "windowed"
+	var current_resolution: Vector2i = Vector2i(1280, 720)
+	var current_scale: float = 1.0
+	if manager != null:
+		current_mode = str(manager.call("get_display_mode"))
+		current_resolution = manager.call("get_windowed_resolution")
+		current_scale = float(manager.call("get_hud_scale"))
+
+	var selected_mode_id: int = 0
+	match current_mode:
+		"borderless_fullscreen":
+			selected_mode_id = 1
+		"exclusive_fullscreen":
+			selected_mode_id = 2
+	_display_mode_option.select(_display_mode_option.get_item_index(selected_mode_id))
+
+	_resolution_option.clear()
+	var resolution_values: Array = []
+	if manager != null:
+		resolution_values = manager.call("get_windowed_resolution_options")
+	else:
+		resolution_values = [Vector2i(960, 540), Vector2i(1280, 720), Vector2i(1600, 900), Vector2i(1920, 1080)]
+	var selected_resolution_index: int = 0
+	for value: Variant in resolution_values:
+		if not value is Vector2i:
+			continue
+		var resolution: Vector2i = value
+		var item_index: int = _resolution_option.get_item_count()
+		_resolution_option.add_item("%d × %d" % [resolution.x, resolution.y])
+		_resolution_option.set_item_metadata(item_index, resolution)
+		if resolution == current_resolution:
+			selected_resolution_index = item_index
+	if _resolution_option.get_item_count() > 0:
+		_resolution_option.select(selected_resolution_index)
+
+	var scale_id: int = clampi(roundi(current_scale * 100.0 / 10.0) * 10, 80, 100)
+	_hud_scale_option.select(_hud_scale_option.get_item_index(scale_id))
+	_update_display_settings_hint()
+
+
+func _on_display_mode_selected(_index: int) -> void:
+	_update_display_settings_hint()
+
+
+func _update_display_settings_hint() -> void:
+	var selected_mode: int = _display_mode_option.get_selected_id()
+	var windowed: bool = selected_mode == 0
+	_resolution_option.disabled = not windowed
+	_resolution_label.modulate = Color.WHITE if windowed else COLOR_MUTED
+	var manager: Node = get_node_or_null("/root/DisplaySettings")
+	var desktop_resolution := Vector2i(1280, 720)
+	if manager != null:
+		desktop_resolution = manager.call("get_desktop_resolution")
+	var desktop_text: String = "%d × %d" % [desktop_resolution.x, desktop_resolution.y]
+	if windowed:
+		_settings_hint.text = "Windowed mode uses the selected size. The window can also be resized with its borders."
+	else:
+		_settings_hint.text = "Fullscreen uses the monitor's current desktop resolution (%s). The display's video mode is not changed." % desktop_text
+
+
+func _apply_display_settings_from_ui() -> void:
+	var manager: Node = get_node_or_null("/root/DisplaySettings")
+	if manager == null:
+		push_error("DisplaySettings autoload is missing. Check the [autoload] entry in project.godot.")
+		return
+
+	var mode: String = "windowed"
+	match _display_mode_option.get_selected_id():
+		1:
+			mode = "borderless_fullscreen"
+		2:
+			mode = "exclusive_fullscreen"
+	var resolution: Vector2i = manager.call("get_windowed_resolution")
+	if _resolution_option.get_item_count() > 0:
+		var selected_metadata: Variant = _resolution_option.get_item_metadata(_resolution_option.get_selected())
+		if selected_metadata is Vector2i:
+			resolution = selected_metadata
+	var selected_hud_scale: float = float(_hud_scale_option.get_selected_id()) / 100.0
+	manager.call("apply_display_settings", mode, resolution, selected_hud_scale)
+	close_display_settings()
 
 
 func _make_panel_style() -> StyleBoxFlat:

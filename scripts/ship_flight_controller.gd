@@ -90,6 +90,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not _ship.is_pilot_ready():
 		return
 
+	# The display panel releases the cursor and blocks all flight controls.
+	# F10 or Escape closes it without changing field state or pilot setpoints.
+	if _hud.is_display_settings_open():
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_F10 or event.physical_keycode == KEY_F10 or event.keycode == KEY_ESCAPE:
+				_hud.close_display_settings()
+		get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventKey and (event.keycode == KEY_F10 or event.physical_keycode == KEY_F10):
+		if event.pressed and not event.echo:
+			_hud.toggle_display_settings()
+			get_viewport().set_input_as_handled()
+		return
+
 	if event.is_action_pressed("ship_camera_toggle") and not _debug_interaction_mode:
 		_camera_controller.toggle_view()
 		_publish_telemetry()
@@ -205,6 +220,8 @@ func _physics_process(delta: float) -> void:
 		_publish_telemetry()
 
 	if not pilot_ready:
+		if _hud.is_display_settings_open():
+			_hud.close_display_settings()
 		if _field_state != FieldState.OFF:
 			_turn_field_off()
 		_update_fcc_snapshot(false)
@@ -222,7 +239,8 @@ func _physics_process(delta: float) -> void:
 			telemetry_changed = false # _set_field_state() already published.
 
 	if _field_state == FieldState.ONLINE:
-		telemetry_changed = _update_online_commands(delta) or telemetry_changed
+		if not _hud.is_display_settings_open():
+			telemetry_changed = _update_online_commands(delta) or telemetry_changed
 		telemetry_changed = _update_actuator_outputs(delta) or telemetry_changed
 	elif not is_zero_approx(_yaw_command):
 		_yaw_command = 0.0
