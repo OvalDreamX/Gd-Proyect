@@ -1,7 +1,7 @@
 extends RigidBody3D
 class_name ShipInteractable
-## Stationary placeholder freighter. The rigid-body root is retained so the scene
-## can evolve into the later force-based ship without replacing its root.
+## Physics-enabled placeholder freighter. The single rigid-body root is retained
+## for all future force-based flight simulation.
 
 @onready var pilot_zone: Area3D = $PilotZone
 @onready var seat_anchor: Marker3D = $CockpitSeat
@@ -14,11 +14,11 @@ var _active_pilot: Node = null
 
 
 func _ready() -> void:
-	# Phase 2A deliberately retains the stationary test fixture. A later
-	# rigid-body milestone will explicitly remove this freeze after validating
-	# gravity, collision response, and resting stability.
-	freeze = true
-	can_sleep = false
+	# GDD Prototype Step 1: use Godot's normal rigid-body integration. Allow the
+	# body to settle and sleep naturally when no forces or collisions disturb it.
+	freeze = false
+	can_sleep = true
+	sleeping = false
 	pilot_zone.body_entered.connect(_on_pilot_zone_body_entered)
 	pilot_zone.body_exited.connect(_on_pilot_zone_body_exited)
 

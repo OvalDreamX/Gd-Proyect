@@ -9,6 +9,11 @@ class_name ShipCameraController
 @export_range(3.0, 30.0, 0.5) var external_camera_distance: float = 11.0
 @export var camera_focus_offset: Vector3 = Vector3(0.0, 0.45, 0.0)
 
+@export_category("External camera zoom")
+@export_range(2.0, 10.0, 0.5) var external_camera_min_distance: float = 4.0
+@export_range(10.0, 40.0, 0.5) var external_camera_max_distance: float = 24.0
+@export_range(0.25, 4.0, 0.25) var external_camera_zoom_step: float = 1.5
+
 @export_category("Camera look")
 @export_range(0.0005, 0.01, 0.0001) var mouse_sensitivity: float = 0.0025
 @export_range(20.0, 89.0, 1.0) var cockpit_pitch_limit_degrees: float = 80.0
@@ -48,7 +53,11 @@ func _ready() -> void:
 		_external_yaw_radians,
 		0.0
 	)
-	_spring_arm.spring_length = external_camera_distance
+	_spring_arm.spring_length = clampf(
+		external_camera_distance,
+		minf(external_camera_min_distance, external_camera_max_distance),
+		maxf(external_camera_min_distance, external_camera_max_distance)
+	)
 	_spring_arm.add_excluded_object(_ship.get_rid())
 	_external_camera.current = false
 	_cockpit_base_rotation = _cockpit_camera.rotation
@@ -76,6 +85,23 @@ func toggle_view() -> void:
 		_external_camera.make_current()
 	else:
 		_cockpit_camera.make_current()
+
+
+## Wheel-up zooms in; wheel-down zooms out. Called by the ship input router so
+## the camera does not own or intercept unrelated player/flight input.
+func zoom_external(direction: float, event_factor: float = 1.0) -> void:
+	if not _using_external_view or is_zero_approx(direction):
+		return
+
+	var min_distance: float = minf(external_camera_min_distance, external_camera_max_distance)
+	var max_distance: float = maxf(external_camera_min_distance, external_camera_max_distance)
+	var scroll_factor: float = event_factor if event_factor > 0.0 else 1.0
+	var zoom_delta: float = signf(direction) * external_camera_zoom_step * scroll_factor
+	_spring_arm.spring_length = clampf(
+		_spring_arm.spring_length - zoom_delta,
+		min_distance,
+		max_distance
+	)
 
 
 ## Routes captured mouse motion to the currently selected camera only.

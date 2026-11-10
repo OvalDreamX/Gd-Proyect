@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ship.tscn" id="2_ship"]
@@ -13,8 +13,11 @@ ambient_light_energy = 0.55
 [sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
 size = Vector2(100, 100)
 
-[sub_resource type="BoxShape3D" id="BoxShape_ground"]
-size = Vector3(100, 1, 100)
+[sub_resource type="BoxShape3D" id="BoxShape_ground_horizontal"]
+size = Vector3(43.0, 1.0, 100.0)
+
+[sub_resource type="BoxShape3D" id="BoxShape_ground_vertical"]
+size = Vector3(14.0, 1.0, 43.0)
 
 [sub_resource type="StandardMaterial3D" id="Material_ground"]
 albedo_color = Color(0.19, 0.22, 0.23, 1)
@@ -22,6 +25,9 @@ roughness = 1.0
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_pad"]
 size = Vector2(14, 14)
+
+[sub_resource type="BoxShape3D" id="BoxShape_landing_pad"]
+size = Vector3(14.0, 0.016, 14.0)
 
 [sub_resource type="StandardMaterial3D" id="Material_pad"]
 albedo_color = Color(0.105, 0.13, 0.15, 1)
@@ -48,12 +54,32 @@ collision_mask = 1
 mesh = SubResource("PlaneMesh_ground")
 material_override = SubResource("Material_ground")
 
-[node name="GroundCollision" type="CollisionShape3D" parent="Ground"]
-position = Vector3(0, -0.5, 0)
-shape = SubResource("BoxShape_ground")
+[node name="GroundCollisionWest" type="CollisionShape3D" parent="Ground"]
+position = Vector3(-28.5, -0.5, 0)
+shape = SubResource("BoxShape_ground_horizontal")
 
-[node name="LandingPad" type="MeshInstance3D" parent="."]
+[node name="GroundCollisionEast" type="CollisionShape3D" parent="Ground"]
+position = Vector3(28.5, -0.5, 0)
+shape = SubResource("BoxShape_ground_horizontal")
+
+[node name="GroundCollisionNorth" type="CollisionShape3D" parent="Ground"]
+position = Vector3(0, -0.5, -28.5)
+shape = SubResource("BoxShape_ground_vertical")
+
+[node name="GroundCollisionSouth" type="CollisionShape3D" parent="Ground"]
+position = Vector3(0, -0.5, 28.5)
+shape = SubResource("BoxShape_ground_vertical")
+
+[node name="LandingPad" type="StaticBody3D" parent="."]
 position = Vector3(0, 0.008, 0)
+collision_layer = 1
+collision_mask = 1
+
+[node name="PadCollision" type="CollisionShape3D" parent="LandingPad"]
+position = Vector3(0, -0.008, 0)
+shape = SubResource("BoxShape_landing_pad")
+
+[node name="PadMesh" type="MeshInstance3D" parent="LandingPad"]
 mesh = SubResource("PlaneMesh_pad")
 material_override = SubResource("Material_pad")
 

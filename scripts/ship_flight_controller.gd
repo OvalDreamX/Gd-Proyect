@@ -55,6 +55,8 @@ var _camera_look_mode: bool = false
 var _debug_interaction_mode: bool = false
 var _debug_overview_enabled: bool = false
 var _pilot_was_ready: bool = false
+const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
+var _telemetry_time_remaining: float = 0.0
 
 
 func _ready() -> void:
@@ -96,6 +98,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			_publish_telemetry()
 			get_viewport().set_input_as_handled()
 			return
+
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if _debug_interaction_mode:
+				get_viewport().set_input_as_handled()
+				return
+			if _camera_controller.is_external_view():
+				var zoom_direction: float = 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
+				_camera_controller.zoom_external(zoom_direction, event.factor)
+				get_viewport().set_input_as_handled()
+				return
 
 	if event is InputEventKey:
 		if _is_shift_key(event) and _camera_look_mode:
@@ -194,6 +207,13 @@ func _physics_process(delta: float) -> void:
 		telemetry_changed = true
 
 	if telemetry_changed:
+		_publish_telemetry()
+
+	# Physics telemetry is refreshed at 10 Hz: responsive enough for diagnosis
+	# without forcing HUD layout updates on every physics tick.
+	_telemetry_time_remaining -= delta
+	if _telemetry_time_remaining <= 0.0:
+		_telemetry_time_remaining = TELEMETRY_UPDATE_INTERVAL_SECONDS
 		_publish_telemetry()
 
 
@@ -325,6 +345,11 @@ func _publish_telemetry() -> void:
 		"debug_overview_enabled": _debug_overview_enabled,
 		"debug_interaction_mode": _debug_interaction_mode,
 		"ship_mass_kg": _ship.mass,
+		"ship_position": _ship.global_position,
+		"ship_linear_velocity": _ship.linear_velocity,
+		"ship_angular_velocity": _ship.angular_velocity,
+		"ship_is_sleeping": _ship.sleeping,
+		"center_of_mass_mode": "AUTO" if _ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO else "CUSTOM",
 		"rigid_body_frozen": _ship.freeze,
 		"physics_output_connected": false,
 		"controls_armed": not _require_neutral_controls,

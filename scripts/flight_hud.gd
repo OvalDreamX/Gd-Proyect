@@ -20,6 +20,10 @@ var _mass_label: Label
 var _physics_label: Label
 var _pitch_roll_label: Label
 var _camera_mode_label: Label
+var _body_state_label: Label
+var _linear_velocity_label: Label
+var _angular_velocity_label: Label
+var _com_mode_label: Label
 var _instruction_label: Label
 var _debug_overview_panel: PanelContainer
 var _debug_overview_label: Label
@@ -53,6 +57,11 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var camera_pitch: float = float(telemetry.get("camera_pitch_degrees", 0.0))
 	var debug_enabled: bool = bool(telemetry.get("debug_overview_enabled", false))
 	var debug_interaction: bool = bool(telemetry.get("debug_interaction_mode", false))
+	var ship_position: Vector3 = telemetry.get("ship_position", Vector3.ZERO)
+	var linear_velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO)
+	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
+	var is_sleeping: bool = bool(telemetry.get("ship_is_sleeping", false))
+	var com_mode: String = str(telemetry.get("center_of_mass_mode", "AUTO"))
 
 	_field_state_label.text = "FIELD STATE       %s" % field_state
 	match field_state:
@@ -80,6 +89,10 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_mass_label.text = "SHIP MASS         %s kg" % String.num(mass_kg, 0)
 	_pitch_roll_label.text = "PITCH %+.2f    ROLL %+.2f" % [pitch, roll]
 	_camera_mode_label.text = "VIEW %s    INPUT %s" % [camera_view, input_mode]
+	_body_state_label.text = "BODY STATE        %s" % ("SLEEPING" if is_sleeping else "ACTIVE")
+	_linear_velocity_label.text = "LINEAR SPEED      %.3f m/s" % linear_velocity.length()
+	_angular_velocity_label.text = "ANGULAR SPEED     %.3f rad/s" % angular_velocity.length()
+	_com_mode_label.text = "CENTER OF MASS    %s" % com_mode
 
 	if physics_connected:
 		_physics_label.text = "FORCE OUTPUT      CONNECTED"
@@ -96,6 +109,10 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			+ "VIRTUAL PITCH: %+.3f     ROLL: %+.3f\n" % [pitch, roll]
 			+ "CAMERA YAW: %+.1f°     PITCH: %+.1f°\n" % [camera_yaw, camera_pitch]
 			+ "DEBUG UI INTERACTION: %s" % ("ACTIVE" if debug_interaction else "INACTIVE")
+			+ "\nWORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
+			+ "LINEAR VEL: (%.3f, %.3f, %.3f) m/s\n" % [linear_velocity.x, linear_velocity.y, linear_velocity.z]
+			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
+			+ "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
 		)
 
 
@@ -121,9 +138,13 @@ func _build_hud() -> void:
 	var status_content := _create_panel_content(status_panel)
 	_add_label(status_content, "PROTOTYPE STATUS", 16, COLOR_ACCENT)
 	_mass_label = _add_label(status_content, "SHIP MASS         -- kg", 14, COLOR_TEXT)
-	_physics_label = _add_label(status_content, "FORCE OUTPUT      DISABLED (PHASE 2B)", 13, COLOR_WARNING)
+	_physics_label = _add_label(status_content, "FORCE OUTPUT      DISABLED (BASELINE)", 13, COLOR_WARNING)
 	_pitch_roll_label = _add_label(status_content, "PITCH +0.00    ROLL +0.00", 12, COLOR_MUTED)
 	_camera_mode_label = _add_label(status_content, "VIEW COCKPIT    INPUT FLIGHT CONTROL", 12, COLOR_MUTED)
+	_body_state_label = _add_label(status_content, "BODY STATE        ACTIVE", 12, COLOR_TEXT)
+	_linear_velocity_label = _add_label(status_content, "LINEAR SPEED      0.000 m/s", 12, COLOR_TEXT)
+	_angular_velocity_label = _add_label(status_content, "ANGULAR SPEED     0.000 rad/s", 12, COLOR_TEXT)
+	_com_mode_label = _add_label(status_content, "CENTER OF MASS    AUTO", 12, COLOR_TEXT)
 
 	var reticle := Label.new()
 	reticle.name = "AttitudeReferencePlaceholder"
@@ -139,7 +160,7 @@ func _build_hud() -> void:
 	reticle.offset_bottom = 12.0
 	root.add_child(reticle)
 
-	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(360.0, 122.0))
+	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(420.0, 218.0))
 	_debug_overview_panel.name = "DebugOverviewPanel"
 	_debug_overview_panel.visible = false
 	var debug_content := _create_panel_content(_debug_overview_panel)
@@ -188,7 +209,7 @@ func _create_anchored_panel(parent: Control) -> PanelContainer:
 	panel.offset_left = -380.0
 	panel.offset_right = -20.0
 	panel.offset_top = 20.0
-	panel.offset_bottom = 210.0
+	panel.offset_bottom = 300.0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", _make_panel_style())
 	parent.add_child(panel)

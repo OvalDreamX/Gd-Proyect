@@ -44,6 +44,7 @@ position = Vector3(0, 0.78, 0)
 script = ExtResource("1_ship")
 freeze = true
 mass = 12000.0
+can_sleep = true
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("BoxShape_hull")
