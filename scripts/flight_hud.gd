@@ -13,7 +13,7 @@ const COLOR_ACCENT: Color = Color(0.30, 0.83, 0.90, 1.0)
 
 var _flight_display: Control
 var _debug_panel: PanelContainer
-var _debug_text_label: Label
+var _debug_text_label: TextEdit
 var _settings_overlay: Control
 var _display_mode_option: OptionButton
 var _resolution_option: OptionButton
@@ -78,7 +78,7 @@ func _build_hud() -> void:
 	content.add_child(title)
 
 	var subtitle := Label.new()
-	subtitle.text = "F3 CLOSES DIAGNOSTICS  |  FORCE ARROWS ARE SHOWN IN THE WORLD  |  SHIFT WHILE RMB-LOOKING RELEASES THE CURSOR"
+	subtitle.text = "F3 CLOSES DIAGNOSTICS  |  SCROLL THE TEXT BELOW  |  SHIFT WHILE RMB-LOOKING RELEASES THE CURSOR"
 	subtitle.add_theme_font_size_override("font_size", 10)
 	subtitle.add_theme_color_override("font_color", COLOR_MUTED)
 	content.add_child(subtitle)
@@ -86,22 +86,26 @@ func _build_hud() -> void:
 	var divider := HSeparator.new()
 	content.add_child(divider)
 
-	var scroll := ScrollContainer.new()
-	scroll.name = "DiagnosticsScroll"
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	content.add_child(scroll)
-
-	_debug_text_label = Label.new()
+	# TextEdit owns its own vertical scrollbar and has a concrete minimum
+	# viewport size. This avoids the nested Label/ScrollContainer sizing failure
+	# that could leave the F3 panel visible but apparently empty on some layouts.
+	_debug_text_label = TextEdit.new()
 	_debug_text_label.name = "DiagnosticsText"
+	_debug_text_label.editable = false
+	_debug_text_label.selecting_enabled = true
+	_debug_text_label.context_menu_enabled = true
+	_debug_text_label.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_debug_text_label.add_theme_font_size_override("font_size", 12)
 	_debug_text_label.add_theme_color_override("font_color", COLOR_TEXT)
-	_debug_text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_debug_text_label.add_theme_color_override("font_readonly_color", COLOR_TEXT)
 	_debug_text_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_debug_text_label.custom_minimum_size = Vector2(0.0, 600.0)
-	_debug_text_label.custom_maximum_size = Vector2(1180.0, 0.0)
-	scroll.add_child(_debug_text_label)
+	_debug_text_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_debug_text_label.custom_minimum_size = Vector2(0.0, 260.0)
+	var transparent_style := StyleBoxEmpty.new()
+	_debug_text_label.add_theme_stylebox_override("normal", transparent_style)
+	_debug_text_label.add_theme_stylebox_override("focus", transparent_style)
+	_debug_text_label.add_theme_stylebox_override("read_only", transparent_style)
+	content.add_child(_debug_text_label)
 
 
 func _update_debug_text(telemetry: Dictionary) -> void:
@@ -156,11 +160,20 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	var atmosphere_density: float = float(telemetry.get("atmosphere_density_kg_m3", 0.0))
 	var atmosphere_airspeed: float = float(telemetry.get("atmosphere_airspeed_mps", 0.0))
 	var atmosphere_wind: Vector3 = telemetry.get("atmosphere_velocity_world", Vector3.ZERO)
+	var atmosphere_mean_wind: Vector3 = telemetry.get("atmosphere_mean_wind_velocity_world", atmosphere_wind)
+	var atmosphere_turbulence: Vector3 = telemetry.get("atmosphere_turbulence_velocity_world", Vector3.ZERO)
 	var atmosphere_relative_velocity: Vector3 = telemetry.get("atmosphere_relative_velocity_world", Vector3.ZERO)
 	var atmosphere_projected_area: float = float(telemetry.get("atmosphere_projected_area_m2", 0.0))
 	var atmosphere_drag_coefficient: float = float(telemetry.get("atmosphere_drag_coefficient", 0.0))
 	var atmosphere_drag_force: Vector3 = telemetry.get("atmosphere_drag_force_world", Vector3.ZERO)
 	var atmosphere_drag_magnitude: float = float(telemetry.get("atmosphere_drag_force_n", 0.0))
+	var atmosphere_turbulence_enabled: bool = bool(telemetry.get("atmosphere_wind_turbulence_enabled", false))
+	var atmosphere_turbulence_amplitude: float = float(telemetry.get("atmosphere_wind_turbulence_amplitude_mps", 0.0))
+	var fcc_input_deadzone: float = float(telemetry.get("fcc_input_deadzone", 0.01))
+	var fcc_input_curvature: float = float(telemetry.get("fcc_input_curvature", 0.18))
+	var fcc_pitch_conditioned: float = float(telemetry.get("fcc_pitch_input_conditioned", pitch_command))
+	var fcc_roll_conditioned: float = float(telemetry.get("fcc_roll_input_conditioned", roll_command))
+	var fcc_yaw_conditioned: float = float(telemetry.get("fcc_yaw_input_conditioned", yaw_command))
 
 	var hover_threshold_text: String = "UNREACHABLE"
 	if hover_power >= 0.0:
@@ -172,6 +185,7 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Pilot commands: pitch %.3f | roll %.3f | yaw %.3f | Controls armed: %s" % [pitch_command, roll_command, yaw_command, str(bool(telemetry.get("controls_armed", false)))])
 	lines.append("Camera: %s | Camera look yaw/pitch: %+.2f° / %+.2f° | Input mode: %s | Debug UI interaction: %s" % [camera_view, camera_yaw, camera_pitch, input_mode, str(bool(telemetry.get("debug_interaction_mode", false)))])
 	lines.append("FCC: %s | Control available: %s | Output P/R/Y: %+.3f / %+.3f / %+.3f" % ["ASSISTED RATE CONTROL" if bool(telemetry.get("fcc_assistance_enabled", true)) else "DIRECT VANES", str(bool(telemetry.get("fcc_control_available", false))), fcc_output.x, fcc_output.z, fcc_output.y])
+	lines.append("Input shaping: deadzone %.1f%% | curve %.0f%% | conditioned P/R/Y: %+.3f / %+.3f / %+.3f" % [fcc_input_deadzone * 100.0, fcc_input_curvature * 100.0, fcc_pitch_conditioned, fcc_roll_conditioned, fcc_yaw_conditioned])
 	lines.append("")
 	lines.append("[ FLIGHT STATE ]")
 	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, position.y])
@@ -195,7 +209,9 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("")
 	lines.append("[ ATMOSPHERE / DRAG ]")
 	lines.append("Atmosphere enabled: %s | Local altitude above reference: %.2f m | Density: %.6f kg/m³" % [str(atmosphere_enabled), atmosphere_altitude, atmosphere_density])
-	lines.append("Airspeed: %.3f m/s | Relative air velocity: %s m/s | Wind velocity: %s m/s" % [atmosphere_airspeed, str(atmosphere_relative_velocity), str(atmosphere_wind)])
+	lines.append("Airspeed: %.3f m/s | Relative air velocity: %s m/s" % [atmosphere_airspeed, str(atmosphere_relative_velocity)])
+	lines.append("Mean wind: %s m/s | Turbulence: %s m/s | Current wind: %s m/s" % [str(atmosphere_mean_wind), str(atmosphere_turbulence), str(atmosphere_wind)])
+	lines.append("Turbulence: %s | Configured amplitude: %.2f m/s" % [str(atmosphere_turbulence_enabled), atmosphere_turbulence_amplitude])
 	lines.append("Projected hull area: %.3f m² | Cd: %.3f | Drag force: %s N | Magnitude: %.2f N" % [atmosphere_projected_area, atmosphere_drag_coefficient, str(atmosphere_drag_force), atmosphere_drag_magnitude])
 	lines.append("")
 	lines.append("[ VANE CONFIGURATION / CONDITION ]")
@@ -221,8 +237,9 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 		var applied_force: Vector3 = force_entry.get("force_world", Vector3.ZERO)
 		lines.append("%s | kind=%s | magnitude=%.1f N | force=%s | application point=%s" % [str(force_entry.get("name", "FORCE")), str(force_entry.get("kind", "unknown")), applied_force.length(), str(applied_force), str(force_entry.get("application_point_world", Vector3.ZERO))])
 
+	var previous_scroll: float = _debug_text_label.scroll_vertical
 	_debug_text_label.text = "\n".join(lines)
-	_debug_text_label.custom_minimum_size.y = maxf(600.0, float(lines.size()) * 19.0)
+	_debug_text_label.scroll_vertical = previous_scroll
 
 
 func is_display_settings_open() -> bool:

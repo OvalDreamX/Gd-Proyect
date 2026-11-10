@@ -24,20 +24,25 @@ func _run_tests() -> void:
 		0.5, -0.25, 0.4, Vector3.ZERO, Basis.IDENTITY, true
 	)
 	var desired: Vector3 = snapshot.get("fcc_desired_rate_local_rad_s", Vector3.ZERO)
-	_expect_near(desired.x, deg_to_rad(16.0), EPSILON, "Half pitch input requests half the configured pitch rate")
-	_expect_near(desired.y, -deg_to_rad(9.6), EPSILON, "Yaw input maps to the local Y angular axis")
-	_expect_near(desired.z, deg_to_rad(8.0), EPSILON, "Negative roll input requests positive local Z angular velocity")
+	var shaped_pitch: float = FlightControlComputer.shape_pilot_input(0.5)
+	var shaped_roll: float = FlightControlComputer.shape_pilot_input(-0.25)
+	var shaped_yaw: float = FlightControlComputer.shape_pilot_input(0.4)
+	_expect_near(desired.x, deg_to_rad(32.0 * shaped_pitch), EPSILON, "Half pitch input is shaped before becoming the requested pitch rate")
+	_expect_near(desired.y, -deg_to_rad(24.0 * shaped_yaw), EPSILON, "Yaw input is shaped and mapped to the local Y angular axis")
+	_expect_near(desired.z, -deg_to_rad(32.0 * shaped_roll), EPSILON, "Negative roll input is shaped and requests positive local Z angular velocity")
 	var initial_output: Vector3 = snapshot.get("fcc_control_output_by_axis", Vector3.ZERO)
 	_expect_near_vector(
 		initial_output,
-		Vector3(0.4, 0.32, -0.2),
+		Vector3(shaped_pitch * 0.8, shaped_yaw * 0.8, shaped_roll * 0.8),
 		EPSILON,
 		"FCC output sign agrees with the established pitch/yaw/roll vane-force convention"
 	)
 
 	# At the requested rate, no further control force is needed.
 	var at_target_world := Vector3(
-		deg_to_rad(16.0), -deg_to_rad(9.6), deg_to_rad(8.0)
+		deg_to_rad(32.0 * shaped_pitch),
+		-deg_to_rad(24.0 * shaped_yaw),
+		-deg_to_rad(32.0 * shaped_roll)
 	)
 	snapshot = computer.calculate_control_outputs(
 		0.5, -0.25, 0.4, at_target_world, Basis.IDENTITY, true
@@ -63,7 +68,11 @@ func _run_tests() -> void:
 
 	# Local-rate extraction remains correct when the ship is rotated in world space.
 	var rotated_basis := Basis(Vector3.UP, deg_to_rad(90.0))
-	var expected_local_rate := Vector3(deg_to_rad(8.0), -deg_to_rad(4.0), deg_to_rad(4.0))
+	var expected_local_rate := Vector3(
+		deg_to_rad(32.0 * FlightControlComputer.shape_pilot_input(0.25)),
+		-deg_to_rad(24.0 * FlightControlComputer.shape_pilot_input(1.0 / 6.0)),
+		-deg_to_rad(32.0 * FlightControlComputer.shape_pilot_input(-0.125))
+	)
 	var rotated_world_rate: Vector3 = rotated_basis * expected_local_rate
 	snapshot = computer.calculate_control_outputs(
 		0.25, -0.125, 1.0 / 6.0, rotated_world_rate, rotated_basis, true
@@ -86,9 +95,13 @@ func _run_tests() -> void:
 	output = snapshot.get("fcc_control_output_by_axis", Vector3.ZERO)
 	_expect_near_vector(
 		output,
-		Vector3(0.3, -0.6, 0.2),
+		Vector3(
+			FlightControlComputer.shape_pilot_input(0.3),
+			FlightControlComputer.shape_pilot_input(-0.6),
+			FlightControlComputer.shape_pilot_input(0.2)
+		),
 		EPSILON,
-		"Assistance OFF passes pitch/yaw/roll commands directly to the vane allocator"
+		"Assistance OFF passes shaped pitch/yaw/roll commands directly to the vane allocator"
 	)
 	_expect(not bool(snapshot.get("fcc_any_axis_saturated", true)), "Direct mode does not report FCC saturation")
 
@@ -110,12 +123,19 @@ func _run_tests() -> void:
 	_expect_near(output.x, 0.4, EPSILON, "Inspector output limit bounds automatic correction")
 	_expect(bool(snapshot.get("fcc_pitch_saturated", false)), "Tunable output cap exposes control saturation")
 
-	# Small input noise is removed at the command deadzone.
+	# The fixed 1% deadzone is remapped, then an 18% cubic blend reduces
+	# center sensitivity while preserving sign and full-scale output.
 	computer.maximum_control_output = 1.0
 	computer.rate_response_gain = 0.8
-	snapshot = computer.calculate_control_outputs(
-		0.01, 0.0, 0.0, Vector3.ZERO, Basis.IDENTITY, true
-	)
+	_expect_near(FlightControlComputer.shape_pilot_input(0.01), 0.0, EPSILON, "Input at the 1% deadzone boundary is suppressed")
+	_expect_near(FlightControlComputer.shape_pilot_input(-0.005), 0.0, EPSILON, "Small negative input noise is suppressed symmetrically")
+	_expect_near(FlightControlComputer.shape_pilot_input(1.0), 1.0, EPSILON, "Positive full-scale input remains full-scale")
+	_expect_near(FlightControlComputer.shape_pilot_input(-1.0), -1.0, EPSILON, "Negative full-scale input remains full-scale")
+	var shaped_midpoint: float = FlightControlComputer.shape_pilot_input(0.5)
+	_expect(shaped_midpoint > 0.0 and shaped_midpoint < 0.5, "18% curve reduces center sensitivity without changing command direction")
+	_expect_near(FlightControlComputer.shape_pilot_input(-0.5), -shaped_midpoint, EPSILON, "Input curve is symmetric")
+	_expect_near(FlightControlComputer.shape_pilot_input(0.5, 0.0, 0.0), 0.5, EPSILON, "Zero curvature retains linear response")
+	snapshot = computer.calculate_control_outputs(0.01, 0.0, 0.0, Vector3.ZERO, Basis.IDENTITY, true)
 	desired = snapshot.get("fcc_desired_rate_local_rad_s", Vector3.ONE)
 	_expect_near(desired.x, 0.0, EPSILON, "Mouse noise inside the deadzone produces no rate request")
 

@@ -50,6 +50,16 @@ func _run_tests() -> void:
 		"atmosphere_density_kg_m3": 1.208,
 		"atmosphere_airspeed_mps": 30.0,
 		"atmosphere_drag_force_n": 4200.0,
+		"atmosphere_mean_wind_velocity_world": Vector3(3.5, 0.0, 4.2),
+		"atmosphere_turbulence_velocity_world": Vector3(0.2, 0.0, -0.1),
+		"atmosphere_velocity_world": Vector3(3.7, 0.0, 4.1),
+		"atmosphere_wind_turbulence_enabled": true,
+		"atmosphere_wind_turbulence_amplitude_mps": 0.9,
+		"fcc_input_deadzone": 0.01,
+		"fcc_input_curvature": 0.18,
+		"fcc_pitch_input_conditioned": 0.4,
+		"fcc_roll_input_conditioned": -0.2,
+		"fcc_yaw_input_conditioned": 0.3,
 	}
 
 	hud.update_telemetry(sample_telemetry)
@@ -64,9 +74,13 @@ func _run_tests() -> void:
 	hud.update_telemetry(debug_telemetry)
 	_expect(not flight_display.visible, "Normal HUD is hidden while F3 diagnostics are active")
 	_expect(debug_panel.visible, "F3 opens the diagnostics page")
-	var diagnostics_label := debug_panel.find_child("DiagnosticsText", true, false) as Label
-	_expect(diagnostics_label != null and diagnostics_label.text.contains("Power setpoint/output"), "F3 page contains the former flight telemetry")
-	_expect(diagnostics_label != null and diagnostics_label.text.contains("ATMOSPHERE / DRAG"), "F3 page includes atmospheric density and drag diagnostics")
+	var diagnostics_view := debug_panel.find_child("DiagnosticsText", true, false) as TextEdit
+	_expect(diagnostics_view != null, "F3 diagnostics use a dedicated scrollable text viewport")
+	_expect(diagnostics_view != null and diagnostics_view.custom_minimum_size.y >= 200.0, "F3 diagnostics text viewport has a non-zero layout height")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("Power setpoint/output"), "F3 page contains the former flight telemetry")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("ATMOSPHERE / DRAG"), "F3 page includes atmospheric density and drag diagnostics")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("Input shaping"), "F3 page reports FCC deadzone and curve settings")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("Mean wind"), "F3 page reports mean wind and turbulence")
 
 	var external_debug_telemetry: Dictionary = debug_telemetry.duplicate(true)
 	external_debug_telemetry["camera_view"] = "EXTERNAL"

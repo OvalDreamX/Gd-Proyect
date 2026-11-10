@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Deterministic unit checks plus a short RigidBody3D drag smoke test.
+## Deterministic atmosphere checks, wind/turbulence checks and a RigidBody3D drag smoke test.
 ## Run from the project root with Godot 4.7.2:
 ## godot --headless --path . --script res://tests/phase_2j_flight_model_test.gd
 
@@ -81,7 +81,7 @@ func _run_tests() -> void:
 
 	await _test_live_rigid_body_drag()
 
-	print("Phase 2J flight-model tests: %d checks, %d failures." % [_checks, _failures])
+	print("Phase 2J/2K flight-model tests: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
 
@@ -109,10 +109,22 @@ func _test_live_rigid_body_drag() -> void:
 
 	var telemetry: Dictionary = model.call("get_telemetry")
 	var drag_force: Vector3 = telemetry.get("atmosphere_drag_force_world", Vector3.ZERO)
-	_expect(drag_force.z > 0.0, "Atmospheric subsystem submits a live drag force opposite ship velocity")
+	var mean_wind: Vector3 = telemetry.get("atmosphere_mean_wind_velocity_world", Vector3.ZERO)
+	var actual_wind: Vector3 = telemetry.get("atmosphere_velocity_world", Vector3.ZERO)
+	var turbulence: Vector3 = telemetry.get("atmosphere_turbulence_velocity_world", Vector3.ZERO)
+	_expect(drag_force.z > 0.0, "Atmospheric subsystem submits drag opposing forward air-relative velocity")
+	_expect(drag_force.x > 0.0, "Front-left crosswind creates a measurable lateral drag force")
 	_expect(float(telemetry.get("atmosphere_density_kg_m3", 0.0)) > 1.2, "Live subsystem samples near sea-level density")
 	_expect(float(telemetry.get("atmosphere_drag_force_n", 0.0)) > 0.0, "Live subsystem exposes drag magnitude for diagnostics")
+	_expect(mean_wind.x > 0.0 and mean_wind.z > 0.0, "Mean wind flows from the ship's front-left toward its rear-right")
+	_expect(actual_wind.distance_to(mean_wind) <= 1.15, "Smooth turbulence remains within its configured amplitude envelope")
 	_expect(absf(body.linear_velocity.z) < 50.0, "Live drag force reduces the ship's forward speed")
+	var initial_turbulence: Vector3 = turbulence
+	for _tick in range(60):
+		await physics_frame
+	var later_telemetry: Dictionary = model.call("get_telemetry")
+	var later_turbulence: Vector3 = later_telemetry.get("atmosphere_turbulence_velocity_world", Vector3.ZERO)
+	_expect(initial_turbulence.distance_to(later_turbulence) > 0.0001, "Coherent turbulence varies over time instead of applying frame-random impulses")
 
 	model.set("atmosphere_enabled", false)
 	model.call("_physics_process", 1.0 / 60.0)

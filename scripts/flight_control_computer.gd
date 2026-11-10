@@ -21,8 +21,11 @@ class_name FlightControlComputer
 ## Vane condition and power impose additional physical limits after this cap.
 @export_range(0.1, 1.0, 0.05) var maximum_control_output: float = 0.8
 
-@export_category("Input conditioning")
-@export_range(0.0, 0.1, 0.005) var command_deadzone: float = 0.015
+## Input conditioning. Fixed initial tuning. These become FCC-display settings later; they are not
+## exposed through a separate options menu.
+const INPUT_DEADZONE: float = 0.01
+## Blend from linear response toward a cubic response. 0.18 = 18% curve.
+const INPUT_CURVATURE: float = 0.18
 
 var assistance_enabled: bool = true
 
@@ -101,6 +104,14 @@ func calculate_control_outputs(
 
 	return {
 		"fcc_assistance_enabled": assistance_enabled,
+		"fcc_input_deadzone": INPUT_DEADZONE,
+		"fcc_input_curvature": INPUT_CURVATURE,
+		"fcc_pitch_input_raw": clampf(pilot_pitch_request, -1.0, 1.0),
+		"fcc_roll_input_raw": clampf(pilot_roll_request, -1.0, 1.0),
+		"fcc_yaw_input_raw": clampf(pilot_yaw_request, -1.0, 1.0),
+		"fcc_pitch_input_conditioned": pitch_request,
+		"fcc_roll_input_conditioned": roll_request,
+		"fcc_yaw_input_conditioned": yaw_request,
 		"fcc_control_available": control_available,
 		"fcc_desired_rate_local_rad_s": desired_rate_local,
 		"fcc_actual_rate_local_rad_s": actual_rate_local,
@@ -119,6 +130,21 @@ func calculate_control_outputs(
 	}
 
 
-func _condition_input(value: float) -> float:
+## Symmetric deadzone remapping followed by a smooth linear-to-cubic blend.
+## The curve preserves both endpoints and sign, while reducing center sensitivity.
+static func shape_pilot_input(value: float, deadzone: float = INPUT_DEADZONE, curvature: float = INPUT_CURVATURE) -> float:
 	var safe_value: float = clampf(value, -1.0, 1.0)
-	return 0.0 if absf(safe_value) < command_deadzone else safe_value
+	var safe_deadzone: float = clampf(deadzone, 0.0, 0.95)
+	var magnitude: float = absf(safe_value)
+	if magnitude <= safe_deadzone:
+		return 0.0
+
+	var normalized_magnitude: float = (magnitude - safe_deadzone) / (1.0 - safe_deadzone)
+	var cubic_magnitude: float = normalized_magnitude * normalized_magnitude * normalized_magnitude
+	var curve_blend: float = clampf(curvature, 0.0, 1.0)
+	var curved_magnitude: float = lerpf(normalized_magnitude, cubic_magnitude, curve_blend)
+	return signf(safe_value) * curved_magnitude
+
+
+func _condition_input(value: float) -> float:
+	return shape_pilot_input(value)
