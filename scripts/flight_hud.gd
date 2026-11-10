@@ -72,7 +72,7 @@ func _build_hud() -> void:
 	_debug_panel.add_child(content)
 
 	var title := Label.new()
-	title.text = "FLIGHT / REPULSORLIFT / FCC DIAGNOSTICS"
+	title.text = "FLIGHT / ATMOSPHERE / REPULSORLIFT / FCC DIAGNOSTICS"
 	title.add_theme_font_size_override("font_size", 17)
 	title.add_theme_color_override("font_color", COLOR_ACCENT)
 	content.add_child(title)
@@ -151,6 +151,16 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	if bool(telemetry.get("fcc_yaw_saturated", false)):
 		fcc_saturated_axes.append("YAW")
 	var saturation_text: String = ", ".join(fcc_saturated_axes) if not fcc_saturated_axes.is_empty() else "NONE"
+	var atmosphere_enabled: bool = bool(telemetry.get("atmosphere_enabled", false))
+	var atmosphere_altitude: float = float(telemetry.get("atmosphere_altitude_m", 0.0))
+	var atmosphere_density: float = float(telemetry.get("atmosphere_density_kg_m3", 0.0))
+	var atmosphere_airspeed: float = float(telemetry.get("atmosphere_airspeed_mps", 0.0))
+	var atmosphere_wind: Vector3 = telemetry.get("atmosphere_velocity_world", Vector3.ZERO)
+	var atmosphere_relative_velocity: Vector3 = telemetry.get("atmosphere_relative_velocity_world", Vector3.ZERO)
+	var atmosphere_projected_area: float = float(telemetry.get("atmosphere_projected_area_m2", 0.0))
+	var atmosphere_drag_coefficient: float = float(telemetry.get("atmosphere_drag_coefficient", 0.0))
+	var atmosphere_drag_force: Vector3 = telemetry.get("atmosphere_drag_force_world", Vector3.ZERO)
+	var atmosphere_drag_magnitude: float = float(telemetry.get("atmosphere_drag_force_n", 0.0))
 
 	var hover_threshold_text: String = "UNREACHABLE"
 	if hover_power >= 0.0:
@@ -182,6 +192,11 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Main vector convention: 0° forward (-Z) | 90° ship-up (+Y) | 110° up/rearward blend")
 	lines.append("Vertical TWR: %.3f / %.3f | Gravity: %.3f m/s² | Hover threshold: %s" % [actual_twr, maximum_twr, gravity, hover_threshold_text])
 	lines.append("Maneuver authority fraction: %.4f | Reference gravity: %.3f m/s²" % [float(telemetry.get("maneuver_authority_fraction", 0.0)), float(telemetry.get("reference_gravity_mps2", 9.81))])
+	lines.append("")
+	lines.append("[ ATMOSPHERE / DRAG ]")
+	lines.append("Atmosphere enabled: %s | Local altitude above reference: %.2f m | Density: %.6f kg/m³" % [str(atmosphere_enabled), atmosphere_altitude, atmosphere_density])
+	lines.append("Airspeed: %.3f m/s | Relative air velocity: %s m/s | Wind velocity: %s m/s" % [atmosphere_airspeed, str(atmosphere_relative_velocity), str(atmosphere_wind)])
+	lines.append("Projected hull area: %.3f m² | Cd: %.3f | Drag force: %s N | Magnitude: %.2f N" % [atmosphere_projected_area, atmosphere_drag_coefficient, str(atmosphere_drag_force), atmosphere_drag_magnitude])
 	lines.append("")
 	lines.append("[ VANE CONFIGURATION / CONDITION ]")
 	lines.append("Configuration valid: %s | Vane count: %d | Healthy count: %d" % [str(bool(telemetry.get("vane_configuration_valid", false))), int(telemetry.get("vane_count", 0)), int(telemetry.get("vane_healthy_count", 0))])

@@ -45,6 +45,11 @@ func _run_tests() -> void:
 		"ship_linear_velocity": Vector3(0.0, 3.0, -30.0),
 		"ship_global_basis": Basis.IDENTITY,
 		"fcc_assistance_enabled": true,
+		"atmosphere_enabled": true,
+		"atmosphere_altitude_m": 120.0,
+		"atmosphere_density_kg_m3": 1.208,
+		"atmosphere_airspeed_mps": 30.0,
+		"atmosphere_drag_force_n": 4200.0,
 	}
 
 	hud.update_telemetry(sample_telemetry)
@@ -61,6 +66,7 @@ func _run_tests() -> void:
 	_expect(debug_panel.visible, "F3 opens the diagnostics page")
 	var diagnostics_label := debug_panel.find_child("DiagnosticsText", true, false) as Label
 	_expect(diagnostics_label != null and diagnostics_label.text.contains("Power setpoint/output"), "F3 page contains the former flight telemetry")
+	_expect(diagnostics_label != null and diagnostics_label.text.contains("ATMOSPHERE / DRAG"), "F3 page includes atmospheric density and drag diagnostics")
 
 	var external_debug_telemetry: Dictionary = debug_telemetry.duplicate(true)
 	external_debug_telemetry["camera_view"] = "EXTERNAL"

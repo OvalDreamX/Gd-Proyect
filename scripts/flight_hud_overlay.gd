@@ -266,7 +266,7 @@ func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, y
 	draw_line(Vector2(center.x, square.position.y + 10.0), Vector2(center.x, square.end.y - 10.0), COLOR_SECONDARY, 1.6)
 	var stick_position := Vector2(
 		center.x + clampf(roll_input, -1.0, 1.0) * 48.0,
-		center.y - clampf(pitch_input, -1.0, 1.0) * 48.0
+		center.y + clampf(pitch_input, -1.0, 1.0) * 48.0
 	)
 	draw_circle(stick_position, 7.0, COLOR_PRIMARY)
 	draw_circle(stick_position, 11.0, COLOR_SECONDARY, false, 1.0)

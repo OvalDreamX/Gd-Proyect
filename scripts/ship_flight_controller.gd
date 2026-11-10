@@ -38,6 +38,7 @@ const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 1.0 / 30.0
 @onready var _camera_controller: ShipCameraController = get_node("../CameraController") as ShipCameraController
 @onready var _repulsorlift_system: RepulsorliftSystem = get_node("../RepulsorliftSystem") as RepulsorliftSystem
 @onready var _fcc: FlightControlComputer = get_node("../FlightControlComputer") as FlightControlComputer
+@onready var _atmospheric_flight_model: AtmosphericFlightModel = get_node_or_null("../AtmosphericFlightModel") as AtmosphericFlightModel
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -59,6 +60,13 @@ var _debug_overview_enabled: bool = false
 var _pilot_was_ready: bool = false
 var _telemetry_time_remaining: float = 0.0
 var _fcc_snapshot: Dictionary = {}
+
+
+## Mouse behaves like a physical flight-control stick: push forward/up to
+## command nose-down; pull back/down to command nose-up. Godot screen Y grows
+## downward, so the screen delta maps directly to the ship's pitch command.
+static func pitch_command_delta_from_mouse_y(screen_delta_y: float, sensitivity: float) -> float:
+	return screen_delta_y * maxf(sensitivity, 0.0)
 
 
 func _ready() -> void:
@@ -186,7 +194,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				1.0
 			)
 			var next_pitch := clampf(
-				_pitch_command - event.screen_relative.y * flight_control_mouse_sensitivity,
+				_pitch_command + pitch_command_delta_from_mouse_y(
+					event.screen_relative.y,
+					flight_control_mouse_sensitivity
+				),
 				-1.0,
 				1.0
 			)
@@ -433,6 +444,8 @@ func _publish_telemetry() -> void:
 	}
 	snapshot.merge(_fcc_snapshot, true)
 	snapshot.merge(_repulsorlift_system.get_telemetry(), true)
+	if is_instance_valid(_atmospheric_flight_model):
+		snapshot.merge(_atmospheric_flight_model.get_telemetry(), true)
 	_hud.update_telemetry(snapshot)
 
 
