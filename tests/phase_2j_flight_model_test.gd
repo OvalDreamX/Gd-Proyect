@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Deterministic atmosphere checks, wind/turbulence checks and a RigidBody3D drag smoke test.
+## Deterministic atmosphere, drag, wind and shield-glide lift checks.
 ## Run from the project root with Godot 4.7.2:
 ## godot --headless --path . --script res://tests/phase_2j_flight_model_test.gd
 
@@ -79,9 +79,64 @@ func _run_tests() -> void:
 		"Zero atmospheric density produces no drag"
 	)
 
-	await _test_live_rigid_body_drag()
+	# Shield-generated glide lift: positive AoA means nose above flight path.
+	var nose_up_basis := Basis(Vector3.RIGHT, deg_to_rad(10.0))
+	var positive_aoa: float = ATMOSPHERIC_MODEL_SCRIPT.calculate_angle_of_attack_degrees(velocity, nose_up_basis)
+	var negative_aoa: float = ATMOSPHERIC_MODEL_SCRIPT.calculate_angle_of_attack_degrees(velocity, Basis(Vector3.RIGHT, deg_to_rad(-10.0)))
+	_expect_near(positive_aoa, 10.0, 0.05, "Nose-up attitude produces positive angle of attack")
+	_expect_near(negative_aoa, -10.0, 0.05, "Nose-down attitude produces negative angle of attack")
+	_expect_near(ATMOSPHERIC_MODEL_SCRIPT.calculate_angle_of_attack_degrees(Vector3.ZERO, Basis.IDENTITY), 0.0, EPSILON, "Zero airspeed produces zero angle of attack")
 
-	print("Phase 2J/2K flight-model tests: %d checks, %d failures." % [_checks, _failures])
+	var lift_at_10: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity, nose_up_basis, 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	var lift_force_at_10: Vector3 = lift_at_10.get("lift_force_world", Vector3.ZERO)
+	_expect(float(lift_at_10.get("lift_coefficient", 0.0)) > 0.0, "Positive angle of attack produces positive lift coefficient")
+	_expect(lift_force_at_10.y > 0.0, "Nose-up forward flight produces upward lift")
+	_expect_near(lift_force_at_10.dot(velocity.normalized()), 0.0, 0.01, "Lift acts perpendicular to air-relative velocity")
+
+	var lift_at_20: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity, nose_up_basis, 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	var lift_at_40: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity * 2.0, nose_up_basis, 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	var lift_force_20: Vector3 = lift_at_20.get("lift_force_world", Vector3.ZERO)
+	var lift_force_40: Vector3 = lift_at_40.get("lift_force_world", Vector3.ZERO)
+	_expect_near(
+		lift_force_40.length() / maxf(lift_force_20.length(), 0.001),
+		4.0,
+		0.02,
+		"Doubling airspeed quadruples shield lift before saturation"
+	)
+	var nose_down_lift: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity, Basis(Vector3.RIGHT, deg_to_rad(-10.0)), 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	_expect(Vector3(nose_down_lift.get("lift_force_world", Vector3.ZERO)).y < 0.0, "Negative angle of attack produces downward lift")
+	var post_stall_cl: float = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift_coefficient(30.0, 1.1, 20.0)
+	_expect(post_stall_cl < 1.1 and post_stall_cl > 0.0, "Lift coefficient fades after the configured stall angle")
+	_expect_near(ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift_coefficient(40.0, 1.1, 20.0), 0.0, EPSILON, "Lift coefficient reaches zero at twice the configured stall angle")
+	var rearward_flow_lift: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		Vector3(0.0, 0.0, 20.0), Basis.IDENTITY, 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	_expect_near(Vector3(rearward_flow_lift.get("lift_force_world", Vector3.ZERO)).length(), 0.0, EPSILON, "Rearward airflow does not generate forward-flight lift")
+	var zero_effectiveness: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity, nose_up_basis, 1.225, 36.0, 1.1, 20.0, 0.0, 5.0, 18.0
+	)
+	_expect_near(Vector3(zero_effectiveness.get("lift_force_world", Vector3.ZERO)).length(), 0.0, EPSILON, "Zero shield effectiveness removes glide lift")
+	var vacuum_lift: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity, nose_up_basis, 0.0, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	_expect_near(Vector3(vacuum_lift.get("lift_force_world", Vector3.ZERO)).length(), 0.0, EPSILON, "Vacuum produces no shield glide lift")
+	var low_speed_lift: Dictionary = ATMOSPHERIC_MODEL_SCRIPT.calculate_shield_lift(
+		velocity.normalized() * 2.0, nose_up_basis, 1.225, 36.0, 1.1, 20.0, 1.0, 5.0, 18.0
+	)
+	_expect_near(Vector3(low_speed_lift.get("lift_force_world", Vector3.ZERO)).length(), 0.0, EPSILON, "Very low airspeed produces no shield glide lift")
+
+	await _test_live_rigid_body_drag()
+	await _test_live_rigid_body_glide_lift()
+
+	print("Phase 2L flight-model tests: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
 
@@ -130,6 +185,46 @@ func _test_live_rigid_body_drag() -> void:
 	model.call("_physics_process", 1.0 / 60.0)
 	telemetry = model.call("get_telemetry")
 	_expect_near(float(telemetry.get("atmosphere_drag_force_n", -1.0)), 0.0, EPSILON, "Disabling the local atmosphere removes the drag force")
+	body.queue_free()
+	await process_frame
+
+
+func _test_live_rigid_body_glide_lift() -> void:
+	var body := RigidBody3D.new()
+	body.name = "ShieldGlideLiftTestBody"
+	body.mass = 12000.0
+	body.gravity_scale = 0.0
+	body.can_sleep = false
+	body.linear_velocity = Vector3(0.0, 0.0, -50.0)
+	body.global_basis = Basis(Vector3.RIGHT, deg_to_rad(10.0))
+	var collision := CollisionShape3D.new()
+	var collision_sphere := SphereShape3D.new()
+	collision_sphere.radius = 1.0
+	collision.shape = collision_sphere
+	body.add_child(collision)
+
+	var model := Node.new()
+	model.name = "AtmosphericFlightModel"
+	model.set_script(ATMOSPHERIC_MODEL_SCRIPT)
+	model.set("atmosphere_velocity_world", Vector3.ZERO)
+	model.set("wind_turbulence_enabled", false)
+	model.set("shield_glide_lift_enabled", true)
+	body.add_child(model)
+	root.add_child(body)
+
+	await physics_frame
+	await physics_frame
+	var telemetry: Dictionary = model.call("get_telemetry")
+	var lift_force: Vector3 = telemetry.get("shield_lift_force_world", Vector3.ZERO)
+	_expect(lift_force.y > 0.0, "Live atmospheric model calculates upward glide lift")
+	_expect(float(telemetry.get("shield_lift_force_n", 0.0)) > 1000.0, "Live glide lift reaches a measurable magnitude at cruise speed")
+	_expect(float(telemetry.get("shield_lift_angle_of_attack_degrees", 0.0)) > 9.0, "Live model reads ship attitude relative to the flight path")
+	_expect(body.linear_velocity.y > 0.0, "Atmospheric subsystem applies lift to the rigid body without repulsorlift input")
+
+	model.set("shield_glide_lift_enabled", false)
+	model.call("_physics_process", 1.0 / 60.0)
+	telemetry = model.call("get_telemetry")
+	_expect_near(float(telemetry.get("shield_lift_force_n", -1.0)), 0.0, EPSILON, "Disabling shield glide lift removes its force")
 	body.queue_free()
 	await process_frame
 

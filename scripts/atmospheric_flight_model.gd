@@ -1,9 +1,9 @@
 extends Node
 class_name AtmosphericFlightModel
 
-## Applies atmospheric drag as an independent environmental force. A mild
-## test-range wind is included so the player can verify that the ship responds
-## to air-relative velocity even while the repulsorlift field is OFF.
+## Applies atmospheric drag and shield-generated lifting-body force as
+## independent environmental effects. Both use the same air-density and
+## air-relative-velocity sample, so wind cannot diverge between subsystems.
 ## Wind is fixed in world space (the test ship initially faces -Z).
 
 @export_category("Atmosphere")
@@ -30,6 +30,20 @@ class_name AtmosphericFlightModel
 @export var hull_dimensions_local_m: Vector3 = Vector3(3.6, 1.5, 5.2)
 @export_range(0.0, 0.001, 0.00001) var minimum_density_kg_m3: float = 0.00001
 
+@export_category("Shield-generated glide lift")
+@export var shield_glide_lift_enabled: bool = true
+## This is an effective field area, not a literal wing area. Tune after flight
+## tests and after the final hull proportions are known.
+@export_range(0.0, 200.0, 0.5) var shield_effective_lift_area_m2: float = 36.0
+## Fraction of available shield lift; later this will be driven by shield condition.
+@export_range(0.0, 1.0, 0.01) var shield_lift_effectiveness: float = 1.0
+@export_range(0.1, 5.0, 0.05) var shield_max_lift_coefficient: float = 1.1
+## Lift rises approximately linearly to this angle, then gradually fades.
+@export_range(5.0, 45.0, 0.5) var shield_stall_angle_degrees: float = 20.0
+## Smoothly suppresses lift around zero/very low airspeed without a hard force step.
+@export_range(0.0, 30.0, 0.5) var lift_minimum_airspeed_mps: float = 5.0
+@export_range(1.0, 60.0, 0.5) var lift_full_effective_airspeed_mps: float = 18.0
+
 const MINIMUM_MASS_KG: float = 0.0001
 const MINIMUM_SPEED_SQUARED: float = 0.000001
 const MINIMUM_FORCE_SQUARED: float = 0.000001
@@ -48,6 +62,12 @@ var _last_relative_air_velocity_world: Vector3 = Vector3.ZERO
 var _last_airspeed_mps: float = 0.0
 var _last_projected_area_m2: float = 0.0
 var _last_drag_force_world: Vector3 = Vector3.ZERO
+var _last_angle_of_attack_degrees: float = 0.0
+var _last_lift_coefficient: float = 0.0
+var _last_lift_speed_gate: float = 0.0
+var _last_forward_flow_fraction: float = 0.0
+var _last_lift_direction_world: Vector3 = Vector3.ZERO
+var _last_lift_force_world: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -96,8 +116,7 @@ func _physics_process(delta: float) -> void:
 	)
 
 	if (
-		_ship.freeze
-		or _ship.mass <= MINIMUM_MASS_KG
+		_ship.mass <= MINIMUM_MASS_KG
 		or _last_density_kg_m3 <= minimum_density_kg_m3
 		or _last_relative_air_velocity_world.length_squared() <= MINIMUM_SPEED_SQUARED
 	):
@@ -116,11 +135,33 @@ func _physics_process(delta: float) -> void:
 		_last_projected_area_m2
 	)
 
+	var lift_result: Dictionary = calculate_shield_lift(
+		_last_relative_air_velocity_world,
+		body_basis,
+		_last_density_kg_m3,
+		shield_effective_lift_area_m2,
+		shield_max_lift_coefficient,
+		shield_stall_angle_degrees,
+		shield_lift_effectiveness,
+		lift_minimum_airspeed_mps,
+		lift_full_effective_airspeed_mps
+	) if shield_glide_lift_enabled else {}
+	_last_angle_of_attack_degrees = float(lift_result.get("angle_of_attack_degrees", 0.0))
+	_last_lift_coefficient = float(lift_result.get("lift_coefficient", 0.0))
+	_last_lift_speed_gate = float(lift_result.get("speed_gate", 0.0))
+	_last_forward_flow_fraction = float(lift_result.get("forward_flow_fraction", 0.0))
+	_last_lift_direction_world = lift_result.get("lift_direction_world", Vector3.ZERO)
+	_last_lift_force_world = lift_result.get("lift_force_world", Vector3.ZERO)
+
+	if _ship.freeze:
+		return
+
+	# Environmental forces are continuous and central in this first model.
+	# This keeps them independent of the vane/repulsorlift torque allocator.
 	if _last_drag_force_world.length_squared() > MINIMUM_FORCE_SQUARED:
-		# Continuous force, once per physics tick. Never multiply by delta and
-		# never use impulses for this continuously acting environmental effect.
-		# Applying it centrally prevents artificial aerodynamic torque.
 		_ship.apply_central_force(_last_drag_force_world)
+	if _last_lift_force_world.length_squared() > MINIMUM_FORCE_SQUARED:
+		_ship.apply_central_force(_last_lift_force_world)
 
 
 func _update_wind_sample() -> void:
@@ -151,6 +192,12 @@ func _reset_frame_telemetry() -> void:
 	_last_airspeed_mps = 0.0
 	_last_projected_area_m2 = 0.0
 	_last_drag_force_world = Vector3.ZERO
+	_last_angle_of_attack_degrees = 0.0
+	_last_lift_coefficient = 0.0
+	_last_lift_speed_gate = 0.0
+	_last_forward_flow_fraction = 0.0
+	_last_lift_direction_world = Vector3.ZERO
+	_last_lift_force_world = Vector3.ZERO
 
 
 ## Exponential atmosphere approximation. Altitude is above the local reference
@@ -205,6 +252,117 @@ static func calculate_drag_force(
 	return -relative_air_velocity_world * force_scale
 
 
+## Angle between the ship's forward axis and air-relative flight path.
+## Positive values mean the nose is above the flight path (positive AoA).
+static func calculate_angle_of_attack_degrees(
+		relative_air_velocity_world: Vector3,
+		ship_basis: Basis
+) -> float:
+	if relative_air_velocity_world.length_squared() <= MINIMUM_SPEED_SQUARED:
+		return 0.0
+	var local_velocity: Vector3 = ship_basis.orthonormalized().inverse() * relative_air_velocity_world
+	if local_velocity.z >= -0.001:
+		return 0.0 # No meaningful forward airflow; don't invent a lift angle.
+	return rad_to_deg(atan2(-local_velocity.y, -local_velocity.z))
+
+
+## Bounded lift curve. It rises linearly to the configured stall angle, then
+## smoothly fades toward zero by twice that angle rather than growing forever.
+static func calculate_shield_lift_coefficient(
+		angle_of_attack_degrees: float,
+		maximum_lift_coefficient: float,
+		stall_angle_degrees: float
+) -> float:
+	if maximum_lift_coefficient <= 0.0 or stall_angle_degrees <= 0.0:
+		return 0.0
+	var normalized_angle: float = absf(angle_of_attack_degrees) / stall_angle_degrees
+	var magnitude: float = minf(normalized_angle, 1.0) * maximum_lift_coefficient
+	if normalized_angle > 1.0:
+		var post_stall_fraction: float = clampf(normalized_angle - 1.0, 0.0, 1.0)
+		var smooth_fade: float = post_stall_fraction * post_stall_fraction * (3.0 - 2.0 * post_stall_fraction)
+		magnitude *= 1.0 - smooth_fade
+	return signf(angle_of_attack_degrees) * magnitude
+
+
+## Calculates a shield-generated lifting-body force from airspeed, density,
+## angle of attack and ship attitude. Returns a telemetry dictionary so the
+## HUD and tests can inspect each stage without reading mutable physics state.
+static func calculate_shield_lift(
+		relative_air_velocity_world: Vector3,
+		ship_basis: Basis,
+		air_density_kg_m3: float,
+		effective_area_m2: float,
+		maximum_lift_coefficient: float,
+		stall_angle_degrees: float,
+		effectiveness: float,
+		minimum_airspeed_mps: float,
+		full_effective_airspeed_mps: float
+) -> Dictionary:
+	var result: Dictionary = {
+		"angle_of_attack_degrees": 0.0,
+		"lift_coefficient": 0.0,
+		"speed_gate": 0.0,
+		"forward_flow_fraction": 0.0,
+		"lift_direction_world": Vector3.ZERO,
+		"lift_force_world": Vector3.ZERO,
+	}
+	var speed_squared: float = relative_air_velocity_world.length_squared()
+	if (
+		air_density_kg_m3 <= 0.0
+		or effective_area_m2 <= 0.0
+		or speed_squared <= MINIMUM_SPEED_SQUARED
+		or effectiveness <= 0.0
+	):
+		return result
+
+	var safe_basis: Basis = ship_basis.orthonormalized()
+	var local_velocity: Vector3 = safe_basis.inverse() * relative_air_velocity_world
+	if local_velocity.z >= -0.001:
+		return result # Lift is not generated from rearward airflow.
+
+	var airspeed: float = sqrt(speed_squared)
+	var angle_of_attack: float = calculate_angle_of_attack_degrees(relative_air_velocity_world, safe_basis)
+	var lift_coefficient: float = calculate_shield_lift_coefficient(
+		angle_of_attack,
+		maximum_lift_coefficient,
+		stall_angle_degrees
+	)
+	var forward_flow_fraction: float = clampf(-local_velocity.normalized().z, 0.0, 1.0)
+	var speed_gate: float = _smoothstep_range(minimum_airspeed_mps, full_effective_airspeed_mps, airspeed)
+	var local_up_world: Vector3 = safe_basis * Vector3.UP
+	var air_direction_world: Vector3 = relative_air_velocity_world / airspeed
+	var lift_direction_world: Vector3 = local_up_world - air_direction_world * local_up_world.dot(air_direction_world)
+	if lift_direction_world.length_squared() <= MINIMUM_SPEED_SQUARED:
+		return result
+	lift_direction_world = lift_direction_world.normalized()
+
+	var dynamic_pressure: float = 0.5 * air_density_kg_m3 * speed_squared
+	var force_magnitude: float = (
+		dynamic_pressure
+		* effective_area_m2
+		* lift_coefficient
+		* clampf(effectiveness, 0.0, 1.0)
+		* speed_gate
+		* forward_flow_fraction
+	)
+	var lift_force_world: Vector3 = lift_direction_world * force_magnitude
+
+	result["angle_of_attack_degrees"] = angle_of_attack
+	result["lift_coefficient"] = lift_coefficient
+	result["speed_gate"] = speed_gate
+	result["forward_flow_fraction"] = forward_flow_fraction
+	result["lift_direction_world"] = lift_direction_world
+	result["lift_force_world"] = lift_force_world
+	return result
+
+
+static func _smoothstep_range(edge_low: float, edge_high: float, value: float) -> float:
+	if edge_high <= edge_low:
+		return 1.0 if value >= edge_high else 0.0
+	var t: float = clampf((value - edge_low) / (edge_high - edge_low), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
 ## Read-only snapshot for the 30 Hz diagnostic HUD. No physics state is changed.
 func get_telemetry() -> Dictionary:
 	return {
@@ -220,6 +378,18 @@ func get_telemetry() -> Dictionary:
 		"atmosphere_drag_coefficient": drag_coefficient,
 		"atmosphere_drag_force_world": _last_drag_force_world,
 		"atmosphere_drag_force_n": _last_drag_force_world.length(),
+		"shield_glide_lift_enabled": shield_glide_lift_enabled,
+		"shield_lift_effectiveness": shield_lift_effectiveness,
+		"shield_effective_lift_area_m2": shield_effective_lift_area_m2,
+		"shield_max_lift_coefficient": shield_max_lift_coefficient,
+		"shield_lift_angle_of_attack_degrees": _last_angle_of_attack_degrees,
+		"shield_lift_coefficient": _last_lift_coefficient,
+		"shield_lift_speed_gate": _last_lift_speed_gate,
+		"shield_lift_forward_flow_fraction": _last_forward_flow_fraction,
+		"shield_lift_direction_world": _last_lift_direction_world,
+		"shield_lift_force_world": _last_lift_force_world,
+		"shield_lift_force_n": _last_lift_force_world.length(),
+		"shield_stall_angle_degrees": shield_stall_angle_degrees,
 		"atmosphere_wind_turbulence_enabled": wind_turbulence_enabled,
 		"atmosphere_wind_turbulence_amplitude_mps": wind_turbulence_amplitude_mps,
 	}
