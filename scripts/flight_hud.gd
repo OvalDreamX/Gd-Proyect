@@ -24,6 +24,9 @@ var _body_state_label: Label
 var _linear_velocity_label: Label
 var _angular_velocity_label: Label
 var _com_mode_label: Label
+var _lift_force_label: Label
+var _lift_twr_label: Label
+var _hover_power_label: Label
 var _instruction_label: Label
 var _debug_overview_panel: PanelContainer
 var _debug_overview_label: Label
@@ -49,8 +52,6 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var roll: float = float(telemetry.get("roll_command", 0.0))
 	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
 	var body_frozen: bool = bool(telemetry.get("rigid_body_frozen", true))
-	var physics_connected: bool = bool(telemetry.get("physics_output_connected", false))
-	var controls_armed: bool = bool(telemetry.get("controls_armed", true))
 	var camera_view: String = str(telemetry.get("camera_view", "COCKPIT"))
 	var input_mode: String = str(telemetry.get("input_mode", "FLIGHT CONTROL"))
 	var camera_yaw: float = float(telemetry.get("camera_yaw_degrees", 0.0))
@@ -62,6 +63,13 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
 	var is_sleeping: bool = bool(telemetry.get("ship_is_sleeping", false))
 	var com_mode: String = str(telemetry.get("center_of_mass_mode", "AUTO"))
+	var lift_force_vector: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO)
+	var lift_force_n: float = float(telemetry.get("lift_force_newtons", 0.0))
+	var actual_lift_twr: float = float(telemetry.get("lift_actual_twr", 0.0))
+	var maximum_lift_twr: float = float(telemetry.get("lift_maximum_twr", 0.0))
+	var hover_power_percent: float = float(telemetry.get("lift_hover_power_percent", -1.0))
+	var gravity_magnitude: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
+	var field_online: bool = bool(telemetry.get("lift_field_online", false))
 
 	_field_state_label.text = "FIELD STATE       %s" % field_state
 	match field_state:
@@ -73,8 +81,8 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			_instruction_label.text = "GENERATOR STARTING..."
 		"ONLINE":
 			_field_state_label.add_theme_color_override("font_color", COLOR_ONLINE)
-			if controls_armed:
-				_instruction_label.text = "FIELD ONLINE  |  COMMAND INPUT IS NOT YET CONNECTED TO PHYSICS"
+			if bool(telemetry.get("controls_armed", true)):
+				_instruction_label.text = "FIELD ONLINE  |  COLLECTIVE LIFT TEST IS FIXED VERTICAL"
 			else:
 				_instruction_label.text = "RELEASE W/S, Q/E AND A/D TO ARM THE COMMAND INPUTS"
 		_:
@@ -93,14 +101,20 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_linear_velocity_label.text = "LINEAR SPEED      %.3f m/s" % linear_velocity.length()
 	_angular_velocity_label.text = "ANGULAR SPEED     %.3f rad/s" % angular_velocity.length()
 	_com_mode_label.text = "CENTER OF MASS    %s" % com_mode
+	_lift_force_label.text = "COLLECTIVE FORCE  %s N" % String.num(lift_force_n, 0)
+	_lift_twr_label.text = "LIFT TWR          %.2f / %.2f" % [actual_lift_twr, maximum_lift_twr]
+	if hover_power_percent >= 0.0 and hover_power_percent <= 100.0:
+		_hover_power_label.text = "HOVER THRESHOLD   %.1f%% OUTPUT" % hover_power_percent
+	else:
+		_hover_power_label.text = "HOVER THRESHOLD   UNREACHABLE"
 
-	if physics_connected:
-		_physics_label.text = "FORCE OUTPUT      CONNECTED"
+	if field_online:
+		_physics_label.text = "COLLECTIVE LIFT    ONLINE"
 		_physics_label.add_theme_color_override("font_color", COLOR_ONLINE)
 	else:
-		_physics_label.text = "FORCE OUTPUT      DISABLED (PHASE 2B)"
-		_physics_label.add_theme_color_override("font_color", COLOR_WARNING)
-	_physics_label.text += "\nRIGID BODY        %s" % ("FROZEN" if body_frozen else "NOT FROZEN")
+		_physics_label.text = "COLLECTIVE LIFT    STANDBY"
+		_physics_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_physics_label.text += "\nRIGID BODY        %s" % ("FROZEN" if body_frozen else "ACTIVE")
 
 	_debug_overview_panel.visible = debug_enabled
 	if debug_enabled:
@@ -108,10 +122,12 @@ func update_telemetry(telemetry: Dictionary) -> void:
 			"VIEW: %s     INPUT: %s\n" % [camera_view, input_mode]
 			+ "VIRTUAL PITCH: %+.3f     ROLL: %+.3f\n" % [pitch, roll]
 			+ "CAMERA YAW: %+.1f°     PITCH: %+.1f°\n" % [camera_yaw, camera_pitch]
-			+ "DEBUG UI INTERACTION: %s" % ("ACTIVE" if debug_interaction else "INACTIVE")
-			+ "\nWORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
+			+ "DEBUG UI INTERACTION: %s\n" % ("ACTIVE" if debug_interaction else "INACTIVE")
+			+ "WORLD POS: (%.3f, %.3f, %.3f) m\n" % [ship_position.x, ship_position.y, ship_position.z]
 			+ "LINEAR VEL: (%.3f, %.3f, %.3f) m/s\n" % [linear_velocity.x, linear_velocity.y, linear_velocity.z]
 			+ "ANGULAR VEL: (%.3f, %.3f, %.3f) rad/s\n" % [angular_velocity.x, angular_velocity.y, angular_velocity.z]
+			+ "LIFT FORCE: (%.0f, %.0f, %.0f) N\n" % [lift_force_vector.x, lift_force_vector.y, lift_force_vector.z]
+			+ "LIFT TWR: %.2f / %.2f    GRAVITY: %.2f m/s²\n" % [actual_lift_twr, maximum_lift_twr, gravity_magnitude]
 			+ "BODY: %s    COM MODE: %s" % ["SLEEPING" if is_sleeping else "ACTIVE", com_mode]
 		)
 
@@ -138,13 +154,16 @@ func _build_hud() -> void:
 	var status_content := _create_panel_content(status_panel)
 	_add_label(status_content, "PROTOTYPE STATUS", 16, COLOR_ACCENT)
 	_mass_label = _add_label(status_content, "SHIP MASS         -- kg", 14, COLOR_TEXT)
-	_physics_label = _add_label(status_content, "FORCE OUTPUT      DISABLED (BASELINE)", 13, COLOR_WARNING)
+	_physics_label = _add_label(status_content, "COLLECTIVE LIFT    STANDBY", 13, COLOR_MUTED)
 	_pitch_roll_label = _add_label(status_content, "PITCH +0.00    ROLL +0.00", 12, COLOR_MUTED)
 	_camera_mode_label = _add_label(status_content, "VIEW COCKPIT    INPUT FLIGHT CONTROL", 12, COLOR_MUTED)
 	_body_state_label = _add_label(status_content, "BODY STATE        ACTIVE", 12, COLOR_TEXT)
 	_linear_velocity_label = _add_label(status_content, "LINEAR SPEED      0.000 m/s", 12, COLOR_TEXT)
 	_angular_velocity_label = _add_label(status_content, "ANGULAR SPEED     0.000 rad/s", 12, COLOR_TEXT)
 	_com_mode_label = _add_label(status_content, "CENTER OF MASS    AUTO", 12, COLOR_TEXT)
+	_lift_force_label = _add_label(status_content, "COLLECTIVE FORCE  0 N", 12, COLOR_TEXT)
+	_lift_twr_label = _add_label(status_content, "LIFT TWR          0.00 / 1.10", 12, COLOR_TEXT)
+	_hover_power_label = _add_label(status_content, "HOVER THRESHOLD   90.9% OUTPUT", 12, COLOR_TEXT)
 
 	var reticle := Label.new()
 	reticle.name = "AttitudeReferencePlaceholder"
@@ -160,7 +179,7 @@ func _build_hud() -> void:
 	reticle.offset_bottom = 12.0
 	root.add_child(reticle)
 
-	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(420.0, 218.0))
+	_debug_overview_panel = _create_panel(root, Vector2(20.0, 270.0), Vector2(440.0, 260.0))
 	_debug_overview_panel.name = "DebugOverviewPanel"
 	_debug_overview_panel.visible = false
 	var debug_content := _create_panel_content(_debug_overview_panel)
@@ -209,7 +228,7 @@ func _create_anchored_panel(parent: Control) -> PanelContainer:
 	panel.offset_left = -380.0
 	panel.offset_right = -20.0
 	panel.offset_top = 20.0
-	panel.offset_bottom = 300.0
+	panel.offset_bottom = 360.0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", _make_panel_style())
 	parent.add_child(panel)

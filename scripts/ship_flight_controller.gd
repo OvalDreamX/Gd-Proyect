@@ -1,12 +1,10 @@
 extends Node
 class_name ShipFlightController
 
-## Phase 2A/2B: collects ship commands, manages field activation, and routes
-## mouse input between virtual flight controls and camera look.
-##
-## IMPORTANT: This script still does not apply forces, impulses, torques, or
-## modify the ship's transform/velocity. The rigid body remains frozen until
-## the GDD's rigid-body and collective-lift milestones are tested.
+## Ship-owned input and field-state controller.
+## Phase 2D adds one narrow connection: actual field power drives the
+## RepulsorliftSystem's fixed vertical collective-lift test.
+## This controller still does not calculate forces or manipulate the body.
 
 enum FieldState {
 	OFF,
@@ -34,9 +32,11 @@ enum FieldState {
 
 const MIN_VECTOR_DISTRIBUTION_DEGREES: float = 0.0
 const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
+const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
 
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 @onready var _camera_controller: ShipCameraController = get_node("../CameraController") as ShipCameraController
+@onready var _repulsorlift_system: RepulsorliftSystem = get_node("../RepulsorliftSystem") as RepulsorliftSystem
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -55,15 +55,15 @@ var _camera_look_mode: bool = false
 var _debug_interaction_mode: bool = false
 var _debug_overview_enabled: bool = false
 var _pilot_was_ready: bool = false
-const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 0.1
 var _telemetry_time_remaining: float = 0.0
 
 
 func _ready() -> void:
-	if _ship == null or _camera_controller == null:
-		push_error("ShipFlightController requires its ShipInteractable parent and CameraController sibling.")
+	if _ship == null or _camera_controller == null or _repulsorlift_system == null:
+		push_error("ShipFlightController requires ShipInteractable, CameraController, and RepulsorliftSystem.")
 		set_process(false)
 		set_process_unhandled_input(false)
+		set_physics_process(false)
 		return
 
 	_hud = FlightHUD.new()
@@ -93,7 +93,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_camera_look_mode = not _camera_look_mode
 			if _debug_interaction_mode:
 				_require_neutral_controls = true
-			_debug_interaction_mode = false
+				_debug_interaction_mode = false
 			_update_mouse_mode()
 			_publish_telemetry()
 			get_viewport().set_input_as_handled()
@@ -131,8 +131,6 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseMotion:
 		if _debug_interaction_mode:
-			# Shift temporarily releases the cursor for future debug widgets.
-			# No flight or camera input is accepted in this mode.
 			get_viewport().set_input_as_handled()
 			return
 
@@ -185,10 +183,9 @@ func _physics_process(delta: float) -> void:
 		_publish_telemetry()
 
 	if not pilot_ready:
-		# Safe default for a future disembark implementation: the field shuts
-		# down automatically if pilot occupancy ends.
 		if _field_state != FieldState.OFF:
 			_turn_field_off()
+		_repulsorlift_system.apply_collective_lift(false, 0.0)
 		return
 
 	var telemetry_changed: bool = false
@@ -205,6 +202,14 @@ func _physics_process(delta: float) -> void:
 	elif not is_zero_approx(_yaw_command):
 		_yaw_command = 0.0
 		telemetry_changed = true
+
+	# This is the only connection between field output and physical movement
+	# in this milestone. The RepulsorliftSystem submits one central force per
+	# physics tick; vector direction remains fixed upward for the Step 2 test.
+	_repulsorlift_system.apply_collective_lift(
+		_field_state == FieldState.ONLINE,
+		_field_power_output
+	)
 
 	if telemetry_changed:
 		_publish_telemetry()
@@ -231,6 +236,7 @@ func _turn_field_off() -> void:
 	_field_power_command = 0.0
 	_field_power_output = 0.0
 	_yaw_command = 0.0
+	_repulsorlift_system.apply_collective_lift(false, 0.0)
 	_set_field_state(FieldState.OFF)
 
 
@@ -351,9 +357,10 @@ func _publish_telemetry() -> void:
 		"ship_is_sleeping": _ship.sleeping,
 		"center_of_mass_mode": "AUTO" if _ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO else "CUSTOM",
 		"rigid_body_frozen": _ship.freeze,
-		"physics_output_connected": false,
+		"physics_output_connected": true,
 		"controls_armed": not _require_neutral_controls,
 	}
+	snapshot.merge(_repulsorlift_system.get_telemetry(), true)
 	_hud.update_telemetry(snapshot)
 
 
