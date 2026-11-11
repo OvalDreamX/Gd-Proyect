@@ -89,7 +89,7 @@ static func calculate_flight_path_marker(
 	if clipped:
 		# Intersect the boresight-to-vector ray with the HUD rectangle. Clamping
 		# X and Y independently would drag diagonal cues into a corner and lose
-		the actual direction of travel.
+		# the actual direction of travel.
 		var ray: Vector2 = raw_position - hud_center
 		var scale_x: float = 1.0e20
 		var scale_y: float = 1.0e20

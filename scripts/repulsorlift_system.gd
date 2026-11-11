@@ -141,6 +141,22 @@ func apply_flight_control_forces(
 		var local_up: Vector3 = -_ship.get_gravity().normalized()
 		_last_vertical_twr = maxf(_last_total_force.dot(local_up), 0.0) / (_ship.mass * _last_gravity_magnitude)
 
+	# Step Phase 2S vane thermal simulation
+	var ambient_temp: float = -10.0
+	var atmosphere_node: Node = _ship.get_node_or_null("AtmosphericFlightModel")
+	if atmosphere_node != null and "ambient_temperature_celsius" in atmosphere_node:
+		ambient_temp = float(atmosphere_node.ambient_temperature_celsius)
+	_vane_controller.update_thermal_simulation(
+		_ship.get_physics_process_delta_time(),
+		ambient_temp,
+		field_online,
+		_last_power_output,
+		_last_vector_angle_degrees,
+		_last_pitch_command,
+		_last_roll_command,
+		_last_yaw_command
+	)
+
 	_update_force_debug()
 
 
@@ -355,6 +371,10 @@ func _get_rated_gross_mass_kg() -> float:
 	if not is_instance_valid(_ship):
 		return 0.0
 	return maxf(_ship.get_design_gross_mass_kg(), MINIMUM_MASS_KG)
+
+
+func is_field_online() -> bool:
+	return _last_field_online
 
 
 func _get_maximum_lift_twr_at_current_mass() -> float:

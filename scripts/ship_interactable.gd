@@ -33,6 +33,10 @@ func get_design_gross_mass_kg() -> float:
 	return get_design_dry_mass_kg() + maxf(max_payload_mass_kg, 0.0)
 
 
+func get_cargo_system() -> Node:
+	return get_node_or_null("CargoSystem")
+
+
 func _ready() -> void:
 	# Angular damping belongs to the FCC in assisted mode. With assistance off,
 	# rotational inertia is preserved just like linear inertia in space.

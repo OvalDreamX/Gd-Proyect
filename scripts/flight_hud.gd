@@ -22,12 +22,25 @@ var _resolution_label: Label
 var _settings_hint: Label
 var _settings_open: bool = false
 var _previous_mouse_mode: int = Input.MOUSE_MODE_VISIBLE
+var _cargo_system: Node = null
+var _cargo_overlay: Control
+var _cargo_open: bool = false
+var _cargo_mass_slider: HSlider
+var _cargo_mass_label: Label
+var _cargo_x_slider: HSlider
+var _cargo_x_label: Label
+var _cargo_y_slider: HSlider
+var _cargo_y_label: Label
+var _cargo_z_slider: HSlider
+var _cargo_z_label: Label
+var _cargo_status_label: Label
 
 
 func _ready() -> void:
 	layer = 20
 	_build_hud()
 	_build_display_settings_overlay()
+	_build_cargo_manifest_overlay()
 	visible = false
 
 
@@ -205,6 +218,17 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Input shaping: deadzone %.1f%% | curve %.0f%% | conditioned P/R/Y: %+.3f / %+.3f / %+.3f" % [fcc_input_deadzone * 100.0, fcc_input_curvature * 100.0, fcc_pitch_conditioned, fcc_roll_conditioned, fcc_yaw_conditioned])
 	lines.append("Vane redistribution: %.0f%% of deficit | healthy-vane cap: %.2fx nominal" % [float(telemetry.get("fcc_vane_redistribution_fraction", 0.0)) * 100.0, float(telemetry.get("fcc_maximum_vane_output_multiplier", 1.0))])
 	lines.append("")
+	var cargo_preset: String = str(telemetry.get("preset", "EMPTY"))
+	var cargo_mass: float = float(telemetry.get("cargo_mass_kg", 0.0))
+	var cargo_offset: Vector3 = telemetry.get("cargo_offset_m", Vector3.ZERO)
+	var com_offset: Vector3 = telemetry.get("center_of_mass_m", Vector3.ZERO)
+	var max_gross: float = float(telemetry.get("max_gross_kg", 55000.0))
+	var hover_est: float = float(telemetry.get("hover_throttle_estimate", 0.0)) * 100.0
+	lines.append("[ CARGO & MASS DISTRIBUTION (PHASE 2T) ]")
+	lines.append("Preset: %s | Payload: %.0f kg | Gross: %.0f / %.0f kg (%.1f%%)" % [cargo_preset, cargo_mass, mass_kg, max_gross, (mass_kg / maxf(max_gross, 1.0)) * 100.0])
+	lines.append("Cargo hold offset: (%.2f, %.2f, %.2f) m | Combined COM: (%.3f, %.3f, %.3f) m" % [cargo_offset.x, cargo_offset.y, cargo_offset.z, com_offset.x, com_offset.y, com_offset.z])
+	lines.append("Estimated 1g hover throttle: %.1f%% | Moment status: %s" % [hover_est, "FCC ACTIVE TRIM COMPENSATION" if com_offset.length_squared() > 0.001 else "SYMMETRICAL / BALANCED"])
+	lines.append("")
 	lines.append("[ FLIGHT STATE ]")
 	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, local_altitude])
 	lines.append("Velocity: (%.3f, %.3f, %.3f) m/s | Ground speed: %.3f m/s | Local vertical speed: %+.3f m/s" % [velocity.x, velocity.y, velocity.z, velocity.length(), local_vertical_speed])
@@ -244,6 +268,25 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	for vane_value in vane_states:
 		var vane: Dictionary = vane_value
 		lines.append("%s | group=%s | enabled=%s | integrity=%.3f | failed=%s | nominal=%.3f TWR | effective=%.3f TWR | local pos=%s" % [str(vane.get("vane_id", "UNKNOWN")), str(vane.get("group_id", "UNKNOWN")), str(vane.get("enabled", true)), float(vane.get("integrity", 0.0)), str(vane.get("failed", false)), float(vane.get("nominal_authority_twr", 0.0)), float(vane.get("effective_authority_twr", 0.0)), str(vane.get("local_position", Vector3.ZERO))])
+	lines.append("")
+	lines.append("[ VANE THERMAL & GREEN ZONE (PHASE 2S) ]")
+	var amb_t: float = float(telemetry.get("atmosphere_temperature_celsius", -10.0))
+	var nom_warm: float = float(telemetry.get("thermal_nominal_warmup_temp_c", 60.0))
+	var max_cont: float = float(telemetry.get("thermal_max_continuous_temp_c", 180.0))
+	var crit_t: float = float(telemetry.get("thermal_critical_temp_c", 230.0))
+	lines.append("Ambient: %+.1f°C | Nominal warmup threshold: %.1f°C | Max continuous: %.1f°C | Critical: %.1f°C" % [amb_t, nom_warm, max_cont, crit_t])
+	for vane_value in vane_states:
+		var vane: Dictionary = vane_value
+		var v_id: String = str(vane.get("vane_id", "UNKNOWN"))
+		var temp_c: float = float(vane.get("temperature_celsius", -10.0))
+		var status: String = str(vane.get("thermal_status", "COLD_STRAIN"))
+		var load_pct: float = float(vane.get("load_fraction", 0.0)) * 100.0
+		var wear_rate: float = float(vane.get("wear_rate_per_second", 0.0)) * 100.0
+		var min_g: float = float(vane.get("min_green_celsius", 60.0))
+		var max_g: float = float(vane.get("max_green_celsius", 160.0))
+		var sputter: bool = bool(vane.get("sputter_active", false))
+		var sput_str: String = " [SPUTTER!]" if sputter else ""
+		lines.append("%-18s | T=%+6.1f°C | %-11s | Green:[%5.1f - %5.1f°C] | Load:%5.1f%% | Wear:%+8.5f%%/s%s" % [v_id, temp_c, status, min_g, max_g, load_pct, -wear_rate, sput_str])
 	lines.append("")
 	lines.append("[ INDIVIDUAL VANE CONTRIBUTIONS ]")
 	if vane_contributions.is_empty():
@@ -497,3 +540,306 @@ func _make_panel_style() -> StyleBoxFlat:
 	style.content_margin_top = 11.0
 	style.content_margin_bottom = 11.0
 	return style
+
+
+func set_cargo_system(system: Node) -> void:
+	_cargo_system = system
+	if _cargo_open:
+		_sync_cargo_ui_from_system()
+
+
+func is_cargo_manifest_open() -> bool:
+	return _cargo_open
+
+
+func toggle_cargo_manifest() -> void:
+	if _cargo_open:
+		close_cargo_manifest()
+		return
+	if _settings_open:
+		close_display_settings()
+	_previous_mouse_mode = Input.mouse_mode
+	_sync_cargo_ui_from_system()
+	_cargo_open = true
+	_cargo_overlay.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func close_cargo_manifest() -> void:
+	if not _cargo_open:
+		return
+	_cargo_open = false
+	_cargo_overlay.visible = false
+	Input.mouse_mode = _previous_mouse_mode
+
+
+func _on_cargo_slider_changed(_val: float) -> void:
+	if _cargo_system == null:
+		return
+	var mass: float = _cargo_mass_slider.value
+	var offset := Vector3(_cargo_x_slider.value, _cargo_y_slider.value, _cargo_z_slider.value)
+	_cargo_system.call("set_cargo", mass, offset, "CUSTOM")
+	_update_cargo_labels()
+
+
+func _on_cargo_preset_clicked(preset_name: String) -> void:
+	if _cargo_system == null:
+		return
+	_cargo_system.call("load_preset", preset_name)
+	_sync_cargo_ui_from_system()
+
+
+func _sync_cargo_ui_from_system() -> void:
+	if _cargo_system == null or _cargo_mass_slider == null:
+		return
+	var t: Dictionary = _cargo_system.call("get_telemetry")
+	_cargo_mass_slider.set_value_no_signal(float(t.get("cargo_mass_kg", 0.0)))
+	var offset: Vector3 = t.get("cargo_offset_m", Vector3.ZERO)
+	_cargo_x_slider.set_value_no_signal(offset.x)
+	_cargo_y_slider.set_value_no_signal(offset.y)
+	_cargo_z_slider.set_value_no_signal(offset.z)
+	_update_cargo_labels()
+
+
+func _update_cargo_labels() -> void:
+	if _cargo_mass_slider == null:
+		return
+	_cargo_mass_label.text = "%.0f kg" % _cargo_mass_slider.value
+	_cargo_x_label.text = "%+.2f m" % _cargo_x_slider.value
+	_cargo_y_label.text = "%+.2f m" % _cargo_y_slider.value
+	_cargo_z_label.text = "%+.2f m" % _cargo_z_slider.value
+
+	if _cargo_system != null:
+		var t: Dictionary = _cargo_system.call("get_telemetry")
+		var total_kg: float = float(t.get("total_mass_kg", 30000.0))
+		var max_kg: float = float(t.get("max_gross_kg", 55000.0))
+		var com: Vector3 = t.get("center_of_mass_m", Vector3.ZERO)
+		var hover: float = float(t.get("hover_throttle_estimate", 0.5)) * 100.0
+		var preset: String = str(t.get("preset", "CUSTOM"))
+		
+		var trim_note: String = "[ BALANCED LOAD ] Even distribution across 4 bottom lift vanes."
+		if absf(com.x) > 0.05 or absf(com.z) > 0.05:
+			var moment_est: float = (total_kg * 9.81 * com.length()) / 1000.0
+			trim_note = "[ ASYMMETRIC LOAD ] Generates ~%.1f kN·m gravity moment.
+FCC stability augmentation trims opposing vanes to hold attitude." % moment_est
+
+		_cargo_status_label.text = "ACTIVE PRESET: %s
+TOTAL MASS: %.0f kg / %.0f kg (%.1f%% Gross Rating)
+COMBINED COM OFFSET: (X: %+.2f m, Y: %+.2f m, Z: %+.2f m)
+ESTIMATED HOVER THROTTLE: %.1f%%
+
+%s" % [
+			preset, total_kg, max_kg, (total_kg / max_kg) * 100.0, com.x, com.y, com.z, hover, trim_note
+		]
+
+
+func _build_cargo_manifest_overlay() -> void:
+	_cargo_overlay = Control.new()
+	_cargo_overlay.name = "CargoManifestOverlay"
+	_cargo_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_cargo_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_cargo_overlay.z_index = 100
+	_cargo_overlay.visible = false
+	add_child(_cargo_overlay)
+
+	var backdrop := ColorRect.new()
+	backdrop.name = "Backdrop"
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.005, 0.012, 0.018, 0.86)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_cargo_overlay.add_child(backdrop)
+
+	var center := CenterContainer.new()
+	center.name = "CenterContainer"
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cargo_overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "CargoPanel"
+	panel.custom_minimum_size = Vector2(580.0, 520.0)
+	panel.add_theme_stylebox_override("panel", _make_panel_style())
+	center.add_child(panel)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 10)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_child(content)
+
+	var title := Label.new()
+	title.text = "CARGO MANIFEST & FCC COMPLIANCE (PHASE 2T)"
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", COLOR_ACCENT)
+	content.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "Press F4 or ESC to resume flight. Mouse released for manifest configuration."
+	subtitle.add_theme_font_size_override("font_size", 11)
+	subtitle.add_theme_color_override("font_color", COLOR_MUTED)
+	content.add_child(subtitle)
+
+	var divider1 := HSeparator.new()
+	content.add_child(divider1)
+
+	var preset_title := Label.new()
+	preset_title.text = "LOAD PRESETS (MASS & LEVER-ARM ASYMMETRY)"
+	preset_title.add_theme_font_size_override("font_size", 12)
+	preset_title.add_theme_color_override("font_color", COLOR_TEXT)
+	content.add_child(preset_title)
+
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 8)
+	content.add_child(row1)
+
+	var btn_empty := Button.new()
+	btn_empty.text = "EMPTY (30t)"
+	btn_empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_empty.pressed.connect(_on_cargo_preset_clicked.bind("EMPTY"))
+	row1.add_child(btn_empty)
+
+	var btn_half := Button.new()
+	btn_half.text = "HALF (42.5t)"
+	btn_half.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_half.pressed.connect(_on_cargo_preset_clicked.bind("HALF_CENTERED"))
+	row1.add_child(btn_half)
+
+	var btn_max := Button.new()
+	btn_max.text = "MAX GROSS (55t)"
+	btn_max.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_max.pressed.connect(_on_cargo_preset_clicked.bind("MAX_GROSS"))
+	row1.add_child(btn_max)
+
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 8)
+	content.add_child(row2)
+
+	var btn_port := Button.new()
+	btn_port.text = "PORT HEAVY (-1.2m)"
+	btn_port.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_port.pressed.connect(_on_cargo_preset_clicked.bind("PORT_HEAVY"))
+	row2.add_child(btn_port)
+
+	var btn_stbd := Button.new()
+	btn_stbd.text = "STBD HEAVY (+1.2m)"
+	btn_stbd.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_stbd.pressed.connect(_on_cargo_preset_clicked.bind("STARBOARD_HEAVY"))
+	row2.add_child(btn_stbd)
+
+	var btn_nose := Button.new()
+	btn_nose.text = "NOSE HEAVY (-1.6m)"
+	btn_nose.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_nose.pressed.connect(_on_cargo_preset_clicked.bind("NOSE_HEAVY"))
+	row2.add_child(btn_nose)
+
+	var btn_aft := Button.new()
+	btn_aft.text = "AFT HEAVY (+1.6m)"
+	btn_aft.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_aft.pressed.connect(_on_cargo_preset_clicked.bind("AFT_HEAVY"))
+	row2.add_child(btn_aft)
+
+	var divider2 := HSeparator.new()
+	content.add_child(divider2)
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 8)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_child(grid)
+
+	# Row: Cargo Mass
+	var l_mass := Label.new()
+	l_mass.text = "PAYLOAD MASS:"
+	l_mass.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(l_mass)
+
+	_cargo_mass_slider = HSlider.new()
+	_cargo_mass_slider.min_value = 0.0
+	_cargo_mass_slider.max_value = 25000.0
+	_cargo_mass_slider.step = 250.0
+	_cargo_mass_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cargo_mass_slider.value_changed.connect(_on_cargo_slider_changed)
+	grid.add_child(_cargo_mass_slider)
+
+	_cargo_mass_label = Label.new()
+	_cargo_mass_label.text = "0 kg"
+	_cargo_mass_label.custom_minimum_size.x = 80.0
+	grid.add_child(_cargo_mass_label)
+
+	# Row: X Offset
+	var l_x := Label.new()
+	l_x.text = "PORT / STBD (X):"
+	l_x.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(l_x)
+
+	_cargo_x_slider = HSlider.new()
+	_cargo_x_slider.min_value = -4.0
+	_cargo_x_slider.max_value = 4.0
+	_cargo_x_slider.step = 0.1
+	_cargo_x_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cargo_x_slider.value_changed.connect(_on_cargo_slider_changed)
+	grid.add_child(_cargo_x_slider)
+
+	_cargo_x_label = Label.new()
+	_cargo_x_label.text = "0.00 m"
+	_cargo_x_label.custom_minimum_size.x = 80.0
+	grid.add_child(_cargo_x_label)
+
+	# Row: Y Offset
+	var l_y := Label.new()
+	l_y.text = "DECK LEVEL (Y):"
+	l_y.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(l_y)
+
+	_cargo_y_slider = HSlider.new()
+	_cargo_y_slider.min_value = -1.0
+	_cargo_y_slider.max_value = 1.0
+	_cargo_y_slider.step = 0.05
+	_cargo_y_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cargo_y_slider.value_changed.connect(_on_cargo_slider_changed)
+	grid.add_child(_cargo_y_slider)
+
+	_cargo_y_label = Label.new()
+	_cargo_y_label.text = "0.00 m"
+	_cargo_y_label.custom_minimum_size.x = 80.0
+	grid.add_child(_cargo_y_label)
+
+	# Row: Z Offset
+	var l_z := Label.new()
+	l_z.text = "FORE / AFT (Z):"
+	l_z.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	grid.add_child(l_z)
+
+	_cargo_z_slider = HSlider.new()
+	_cargo_z_slider.min_value = -6.0
+	_cargo_z_slider.max_value = 6.0
+	_cargo_z_slider.step = 0.1
+	_cargo_z_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cargo_z_slider.value_changed.connect(_on_cargo_slider_changed)
+	grid.add_child(_cargo_z_slider)
+
+	_cargo_z_label = Label.new()
+	_cargo_z_label.text = "0.00 m"
+	_cargo_z_label.custom_minimum_size.x = 80.0
+	grid.add_child(_cargo_z_label)
+
+	var divider3 := HSeparator.new()
+	content.add_child(divider3)
+
+	_cargo_status_label = Label.new()
+	_cargo_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_cargo_status_label.custom_minimum_size.y = 80.0
+	_cargo_status_label.add_theme_font_size_override("font_size", 11)
+	_cargo_status_label.add_theme_color_override("font_color", COLOR_ACCENT)
+	content.add_child(_cargo_status_label)
+
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.add_theme_constant_override("separation", 10)
+	content.add_child(buttons)
+
+	var close_btn := Button.new()
+	close_btn.text = "RESUME FLIGHT (F4/ESC)"
+	close_btn.custom_minimum_size = Vector2(180.0, 36.0)
+	close_btn.pressed.connect(close_cargo_manifest)
+	buttons.add_child(close_btn)

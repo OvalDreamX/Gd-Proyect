@@ -1,28 +1,76 @@
 extends Node
 class_name VaneController
 
-## Owns shared vane definitions and per-ship runtime condition.
-## This script calculates group resultants and weighted application points;
-## it never applies forces to the ship itself.
+## Owns shared vane definitions, per-ship runtime condition, and thermal simulation.
+## This script calculates group resultants, weighted application points, and thermal/wear
+## progression. It never applies forces directly to the ship rigid body.
 
 class VaneRuntimeState:
 	extends RefCounted
 	var integrity: float = 1.0
 	var failed: bool = false
 	var alignment_offset_degrees: Vector3 = Vector3.ZERO
+	var temperature_celsius: float = -10.0
+	var load_fraction: float = 0.0
+	var wear_rate_per_second: float = 0.0
+	var thermal_status: StringName = &"COLD_STRAIN"
+	var min_green_celsius: float = 60.0
+	var max_green_celsius: float = 160.0
+	var sputter_active: bool = false
+	var sputter_timer: float = 0.0
 
-	func reset() -> void:
+	func reset(default_temp: float = -10.0) -> void:
 		integrity = 1.0
 		failed = false
 		alignment_offset_degrees = Vector3.ZERO
+		temperature_celsius = default_temp
+		load_fraction = 0.0
+		wear_rate_per_second = 0.0
+		thermal_status = &"COLD_STRAIN"
+		min_green_celsius = 60.0
+		max_green_celsius = 160.0
+		sputter_active = false
+		sputter_timer = 0.0
 
 	func authority_multiplier() -> float:
-		return 0.0 if failed else clampf(integrity, 0.0, 1.0)
+		if failed:
+			return 0.0
+		var base_mult: float = clampf(integrity, 0.0, 1.0)
+		if sputter_active:
+			base_mult *= 0.65
+		# Cold temperature authority clamp:
+		# Below nominal 60°C, cold crystal matrix cannot deliver full 100% force
+		if temperature_celsius < 60.0:
+			var warmup_progress: float = clampf((temperature_celsius - (-10.0)) / (60.0 - (-10.0)), 0.0, 1.0)
+			var cold_clamp: float = lerpf(0.70, 1.0, warmup_progress)
+			base_mult = minf(base_mult, cold_clamp)
+		elif temperature_celsius > 180.0 and temperature_celsius <= 230.0:
+			# Temporary overdrive output boost (1.05x) at the cost of rapid heat and wear
+			base_mult *= 1.05
+		return base_mult
 
 
 @export_category("Vane configuration")
 ## Resources are configuration only. Runtime state is always local to this ship.
 @export var vane_definitions: Array[Resource] = []
+
+@export_category("Thermal & Degradation (Phase 2S)")
+## Minimum nominal operating temperature for full 100% power without cold strain.
+@export_range(20.0, 100.0, 1.0) var nominal_warmup_temp_c: float = 60.0
+## Maximum continuous operating temperature before overheating starts.
+@export_range(120.0, 240.0, 5.0) var max_continuous_temp_c: float = 180.0
+## Critical threshold where sputtering, drift, and accelerated failure occur.
+@export_range(200.0, 300.0, 5.0) var critical_temp_c: float = 230.0
+## Baseline heating rate when the repulsorlift field is active at idle (°C/s).
+@export_range(0.5, 10.0, 0.1) var base_online_heat_rate: float = 3.0
+## Heating rate coefficient at 100% vane power (°C/s).
+@export_range(5.0, 40.0, 0.5) var heat_rate_coefficient: float = 22.0
+## Radiator and ambient cooling coefficient (1/s).
+@export_range(0.01, 0.20, 0.005) var cooling_coefficient: float = 0.05
+## Multiplier for quadratic degradation: wear = base + k * (deltaT)^2 * (load^2).
+@export_range(0.000001, 0.0001, 0.000001) var quadratic_wear_coefficient: float = 0.000008
+## Base operating wear per second in the green zone.
+@export_range(0.0, 0.0001, 0.000001) var base_wear_rate_per_second: float = 0.000002
 
 const MINIMUM_GROUP_AUTHORITY: float = 0.000001
 const ALIGNMENT_DEGREES_TO_RADIANS: float = PI / 180.0
@@ -48,7 +96,6 @@ func _rebuild_runtime_states() -> void:
 		if not resource is VaneDefinition:
 			_configuration_errors.append("Vane entry is missing or is not a VaneDefinition Resource.")
 			continue
-
 		var definition := resource as VaneDefinition
 		if definition.vane_id.is_empty():
 			_configuration_errors.append("A vane definition has an empty vane_id.")
@@ -112,7 +159,7 @@ func get_group_nominal_authority_twr(group_id: StringName) -> float:
 	return total_authority
 
 
-## Effective authority includes disabled/failing/partially damaged runtime state.
+## Effective authority includes disabled/failing/partially damaged/temperature-clamped runtime state.
 func get_group_effective_authority_twr(group_id: StringName) -> float:
 	var total_authority: float = 0.0
 	for vane_id in _definitions_by_id:
@@ -132,8 +179,7 @@ func calculate_group_resultant(
 		ship_global_transform: Transform3D,
 		center_of_mass_local: Vector3,
 		redistribution_fraction: float = 0.0,
-		maximum_output_multiplier: float = 1.2
-) -> Dictionary:
+		maximum_output_multiplier: float = 1.2) -> Dictionary:
 	return calculate_vane_set_resultant(
 		get_vane_ids_for_group(group_id),
 		force_direction_world,
@@ -156,8 +202,7 @@ func calculate_vane_set_resultant(
 		ship_global_transform: Transform3D,
 		center_of_mass_local: Vector3,
 		redistribution_fraction: float = 0.0,
-		maximum_output_multiplier: float = 1.2
-) -> Dictionary:
+		maximum_output_multiplier: float = 1.2) -> Dictionary:
 	var net_force: Vector3 = Vector3.ZERO
 	var net_torque: Vector3 = Vector3.ZERO
 	var contributions: Array[Dictionary] = []
@@ -224,6 +269,7 @@ func calculate_vane_set_resultant(
 		if total_healthy_headroom_twr > MINIMUM_FORCE_WEIGHT and spare_headroom > 0.0:
 			redistributed_authority = redistribution_budget_twr * spare_headroom / total_healthy_headroom_twr
 		var effective_vane_twr: float = base_authority + redistributed_authority
+
 		var alignment_radians: Vector3 = state.alignment_offset_degrees * ALIGNMENT_DEGREES_TO_RADIANS
 		var alignment_basis := Basis.from_euler(alignment_radians)
 		var vane_direction_world: Vector3 = (
@@ -240,6 +286,7 @@ func calculate_vane_set_resultant(
 		effective_authority_twr += effective_vane_twr
 		net_force += vane_force
 		net_torque += vane_torque
+
 		if force_magnitude > MINIMUM_FORCE_WEIGHT:
 			weighted_application_point += application_point_world * force_magnitude
 			total_force_weight += force_magnitude
@@ -275,8 +322,7 @@ func _make_resultant(
 		contributions: Array[Dictionary],
 		nominal_authority_twr: float,
 		effective_authority_twr: float,
-		effective_application_point_world: Vector3
-) -> Dictionary:
+		effective_application_point_world: Vector3) -> Dictionary:
 	return {
 		"net_force": net_force,
 		"net_torque": net_torque,
@@ -287,12 +333,158 @@ func _make_resultant(
 	}
 
 
+## Phase 2S: Steps temperature, green zone limits, and quadratic degradation for all vanes.
+func update_thermal_simulation(
+		delta: float,
+		ambient_temperature_celsius: float,
+		field_online: bool,
+		main_power_output: float,
+		vector_angle_degrees: float,
+		pitch_command: float = 0.0,
+		roll_command: float = 0.0,
+		yaw_command: float = 0.0) -> void:
+	if delta <= 0.00001:
+		return
+
+	var lift_blend: float = clampf(vector_angle_degrees / 90.0, 0.0, 1.0)
+	var forward_blend: float = 1.0 - lift_blend
+
+	# Calculate per-vane demanded load from main vector plus maneuver inputs
+	for vane_id in _definitions_by_id:
+		var definition := _definitions_by_id[vane_id] as VaneDefinition
+		var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+		if not definition.enabled:
+			state.load_fraction = 0.0
+			continue
+
+		var load: float = 0.0
+		if field_online:
+			match definition.group_id:
+				&"bottom_front":
+					var base_lift: float = main_power_output * lift_blend
+					# Pitch-down increases front bottom demand
+					var pitch_extra: float = -pitch_command * 0.35
+					# Roll demands
+					var roll_extra: float = (roll_command if vane_id == &"bottom_front_left" else -roll_command) * 0.35
+					load = clampf(base_lift + maxf(pitch_extra, 0.0) + maxf(roll_extra, 0.0), 0.0, 1.25)
+				&"bottom_rear":
+					var base_lift: float = main_power_output * lift_blend
+					# Pitch-up increases rear bottom demand
+					var pitch_extra: float = pitch_command * 0.35
+					var roll_extra: float = (roll_command if vane_id == &"bottom_rear_left" else -roll_command) * 0.35
+					load = clampf(base_lift + maxf(pitch_extra, 0.0) + maxf(roll_extra, 0.0), 0.0, 1.25)
+				&"main_rear":
+					load = clampf(main_power_output * forward_blend, 0.0, 1.25)
+				&"side_left":
+					var yaw_left: float = -yaw_command if yaw_command < 0.0 else 0.0
+					load = clampf(yaw_left, 0.0, 1.25)
+				&"side_right":
+					var yaw_right: float = yaw_command if yaw_command > 0.0 else 0.0
+					load = clampf(yaw_right, 0.0, 1.25)
+
+		state.load_fraction = load
+		_step_individual_vane_thermal(state, definition, delta, ambient_temperature_celsius, field_online)
+
+
+func _step_individual_vane_thermal(
+		state: VaneRuntimeState,
+		_definition: VaneDefinition,
+		delta: float,
+		ambient_temperature_celsius: float,
+		field_online: bool) -> void:
+	var load: float = state.load_fraction
+
+	# Heat Generation: base online heat + k_heat * (load^2)
+	var heat_in: float = 0.0
+	if field_online:
+		heat_in = base_online_heat_rate + heat_rate_coefficient * (load * load)
+
+	# Heat Dissipation (Radiators + ambient convective cooling)
+	var heat_out: float = cooling_coefficient * (state.temperature_celsius - ambient_temperature_celsius)
+
+	var d_temp: float = (heat_in - heat_out) * delta
+	state.temperature_celsius += d_temp
+
+	# Calculate Green Zone boundaries for this load level
+	state.min_green_celsius = nominal_warmup_temp_c * pow(load, 0.7)
+	state.max_green_celsius = max_continuous_temp_c - (load * 20.0)
+
+	var delta_from_green: float = 0.0
+	if state.temperature_celsius < state.min_green_celsius:
+		state.thermal_status = &"COLD_STRAIN"
+		delta_from_green = state.min_green_celsius - state.temperature_celsius
+	elif state.temperature_celsius > critical_temp_c:
+		state.thermal_status = &"CRITICAL"
+		delta_from_green = state.temperature_celsius - state.max_green_celsius
+	elif state.temperature_celsius > state.max_green_celsius:
+		state.thermal_status = &"OVERHEAT"
+		delta_from_green = state.temperature_celsius - state.max_green_celsius
+	else:
+		state.thermal_status = &"GREEN_ZONE"
+		delta_from_green = 0.0
+
+	# Quadratic degradation rate:
+	# Inside green zone: minimal base wear
+	# Outside green zone: base + k * (deltaT)^2 * (load^2)
+	state.wear_rate_per_second = base_wear_rate_per_second
+	if delta_from_green > 0.0 and load > 0.001:
+		state.wear_rate_per_second += quadratic_wear_coefficient * (delta_from_green * delta_from_green) * (load * load)
+
+	var wear_amount: float = state.wear_rate_per_second * delta
+	state.integrity = maxf(0.0, state.integrity - wear_amount)
+
+	if state.integrity <= 0.0001:
+		state.failed = true
+		state.integrity = 0.0
+
+	# Sputtering under critical temperature or severe degradation
+	if state.temperature_celsius > critical_temp_c or state.integrity < 0.20:
+		state.sputter_timer -= delta
+		if state.sputter_timer <= 0.0:
+			state.sputter_active = not state.sputter_active
+			state.sputter_timer = randf_range(0.15, 0.45)
+	else:
+		state.sputter_active = false
+		state.sputter_timer = 0.0
+
+
 func set_vane_integrity(vane_id: StringName, integrity: float) -> bool:
 	if not _runtime_states_by_id.has(vane_id):
 		return false
 	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
 	state.integrity = clampf(integrity, 0.0, 1.0)
+	if state.integrity > 0.0:
+		state.failed = false
 	return true
+
+
+func set_vane_temperature(vane_id: StringName, temperature_celsius: float) -> bool:
+	if not _runtime_states_by_id.has(vane_id):
+		return false
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	state.temperature_celsius = temperature_celsius
+	return true
+
+
+func get_vane_temperature(vane_id: StringName) -> float:
+	if not _runtime_states_by_id.has(vane_id):
+		return -10.0
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	return state.temperature_celsius
+
+
+func get_vane_thermal_status(vane_id: StringName) -> StringName:
+	if not _runtime_states_by_id.has(vane_id):
+		return &"UNKNOWN"
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	return state.thermal_status
+
+
+func get_vane_wear_rate(vane_id: StringName) -> float:
+	if not _runtime_states_by_id.has(vane_id):
+		return 0.0
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	return state.wear_rate_per_second
 
 
 func set_vane_failed(vane_id: StringName, failed: bool) -> bool:
@@ -311,10 +503,10 @@ func set_vane_alignment_offset(vane_id: StringName, offset_degrees: Vector3) -> 
 	return true
 
 
-func reset_all_vanes() -> void:
+func reset_all_vanes(default_temperature: float = -10.0) -> void:
 	for vane_id in _runtime_states_by_id:
 		var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
-		state.reset()
+		state.reset(default_temperature)
 
 
 func get_telemetry() -> Dictionary:
@@ -333,12 +525,21 @@ func get_telemetry() -> Dictionary:
 			"integrity": state.integrity,
 			"failed": state.failed,
 			"alignment_offset_degrees": state.alignment_offset_degrees,
+			"temperature_celsius": state.temperature_celsius,
+			"load_fraction": state.load_fraction,
+			"thermal_status": state.thermal_status,
+			"wear_rate_per_second": state.wear_rate_per_second,
+			"min_green_celsius": state.min_green_celsius,
+			"max_green_celsius": state.max_green_celsius,
+			"sputter_active": state.sputter_active,
 		})
-
 	return {
 		"vane_count": get_vane_count(),
 		"vane_healthy_count": get_healthy_vane_count(),
 		"vane_configuration_valid": _configuration_valid,
 		"vane_configuration_errors": get_configuration_errors(),
 		"vane_states": vane_states,
+		"thermal_nominal_warmup_temp_c": nominal_warmup_temp_c,
+		"thermal_max_continuous_temp_c": max_continuous_temp_c,
+		"thermal_critical_temp_c": critical_temp_c,
 	}

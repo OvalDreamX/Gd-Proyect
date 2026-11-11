@@ -41,6 +41,7 @@ const COCKPIT_RECENTER_DELAY_SECONDS: float = 3.0
 @onready var _fcc: FlightControlComputer = get_node("../FlightControlComputer") as FlightControlComputer
 @onready var _atmospheric_flight_model: AtmosphericFlightModel = get_node_or_null("../AtmosphericFlightModel") as AtmosphericFlightModel
 @onready var _flight_sensor_suite: FlightSensorSuite = get_node_or_null("../FlightSensorSuite") as FlightSensorSuite
+@onready var _cargo_system: Node = get_node_or_null("../CargoSystem")
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -93,6 +94,8 @@ func _ready() -> void:
 	_hud.name = "FlightHUD"
 	add_child(_hud)
 	_hud.visible = false
+	if is_instance_valid(_cargo_system):
+		_hud.set_cargo_system(_cargo_system)
 	_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
 	_update_fcc_snapshot(false)
 	_publish_telemetry()
@@ -100,6 +103,20 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _ship.is_pilot_ready():
+		return
+
+	# Cargo manifest panel releases cursor and blocks flight controls.
+	if _hud.is_cargo_manifest_open():
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_F4 or event.physical_keycode == KEY_F4 or event.keycode == KEY_ESCAPE:
+				_hud.close_cargo_manifest()
+		get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventKey and (event.keycode == KEY_F4 or event.physical_keycode == KEY_F4):
+		if event.pressed and not event.echo:
+			_hud.toggle_cargo_manifest()
+			get_viewport().set_input_as_handled()
 		return
 
 	# The display panel releases the cursor and blocks all flight controls.
@@ -475,7 +492,10 @@ func _publish_telemetry() -> void:
 		snapshot.merge(_atmospheric_flight_model.get_telemetry(), true)
 	if is_instance_valid(_flight_sensor_suite):
 		snapshot.merge(_flight_sensor_suite.get_instrument_snapshot(), true)
+	if is_instance_valid(_cargo_system):
+		snapshot.merge(_cargo_system.call("get_telemetry"), true)
 	_hud.update_telemetry(snapshot)
+
 
 
 func _input_mode_name() -> String:

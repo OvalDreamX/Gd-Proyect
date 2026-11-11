@@ -14,6 +14,10 @@ class_name AtmosphericFlightModel
 @export_range(0.0, 2.0, 0.001) var sea_level_density_kg_m3: float = 1.225
 @export_range(100.0, 50000.0, 100.0) var density_scale_height_m: float = 8500.0
 
+@export_category("Thermal environment")
+## Ambient planetary surface temperature in Celsius. Defaults to -10°C on the cold test range.
+@export var ambient_temperature_celsius: float = -10.0
+
 @export_category("Test-range wind")
 ## Mean wind direction is from the ship's front-left toward its rear-right
 ## at the initial test-range heading (-Z). This is world-space wind velocity,
@@ -370,6 +374,7 @@ static func _smoothstep_range(edge_low: float, edge_high: float, value: float) -
 func get_telemetry() -> Dictionary:
 	return {
 		"atmosphere_enabled": atmosphere_enabled,
+		"atmosphere_temperature_celsius": ambient_temperature_celsius,
 		"atmosphere_altitude_m": _last_altitude_m,
 		"atmosphere_up_world": _last_up_world,
 		"atmosphere_density_kg_m3": _last_density_kg_m3,
