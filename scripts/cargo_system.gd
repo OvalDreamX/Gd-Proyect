@@ -2,21 +2,19 @@ extends Node
 class_name CargoSystem
 
 ## Independent cargo and mass subsystem for the Prototype Freighter.
-## Modifies RigidBody3D mass and center_of_mass without altering geometric
-## vane mounting points or design thrust ratings.
+## The ship scene is the single source of truth for dry mass and payload rating.
+## Cargo modifies RigidBody3D mass and center_of_mass without moving vane mounts.
 
 signal cargo_manifest_changed(manifest: Dictionary)
 
 const MIN_CARGO_MASS_KG: float = 0.0
-const MAX_CARGO_MASS_KG: float = 25000.0
 
-# Cargo hold physical bounds relative to ship origin (meters)
+# Cargo hold physical bounds relative to ship origin (meters).
 const CARGO_BAY_MIN: Vector3 = Vector3(-4.0, -1.0, -6.0)
 const CARGO_BAY_MAX: Vector3 = Vector3(4.0, 1.0, 6.0)
 
-@export_category("Design ratings")
-@export_range(5000.0, 100000.0, 500.0) var dry_mass_kg: float = 30000.0
-@export_range(0.0, 50000.0, 500.0) var max_payload_mass_kg: float = 25000.0
+var dry_mass_kg: float = 0.0
+var max_payload_mass_kg: float = 0.0
 
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 
@@ -28,9 +26,13 @@ var _current_preset: String = "EMPTY"
 func _ready() -> void:
 	if _ship == null:
 		push_error("CargoSystem requires a ShipInteractable parent.")
+		set_process(false)
 		return
-	if dry_mass_kg <= 0.0 and _ship.mass > 0.0:
-		dry_mass_kg = _ship.get_design_dry_mass_kg()
+
+	# Do not duplicate ratings here: the ship's authored dry mass and payload
+	# capacity are authoritative for propulsion, cargo limits and telemetry.
+	dry_mass_kg = _ship.get_design_dry_mass_kg()
+	max_payload_mass_kg = maxf(_ship.max_payload_mass_kg, 0.0)
 	apply_manifest()
 
 
@@ -56,10 +58,11 @@ func get_combined_center_of_mass_m() -> Vector3:
 	return (_cargo_offset_m * _cargo_mass_kg) / total
 
 
-## Theoretical hover throttle required at 1g (9.81 m/s^2)
-## Bottom 4 vanes total max thrust is rated at 593,505 N (1.10 TWR at 55t gross).
+## Nominal 1g hover estimate using the fixed 1.10 gross-TWR design rating.
+## It intentionally excludes thermal derating, damage and local gravity changes.
 func get_hover_throttle_estimate() -> float:
-	var bottom_max_thrust_newtons: float = (dry_mass_kg + max_payload_mass_kg) * 9.81 * 1.10
+	var design_gross_mass: float = dry_mass_kg + max_payload_mass_kg
+	var bottom_max_thrust_newtons: float = design_gross_mass * 9.81 * 1.10
 	if bottom_max_thrust_newtons <= 0.001:
 		return 0.50
 	var required_lift_newtons: float = get_total_mass_kg() * 9.81
@@ -67,7 +70,7 @@ func get_hover_throttle_estimate() -> float:
 
 
 func set_cargo(mass_kg: float, offset_m: Vector3, preset_name: String = "CUSTOM") -> void:
-	_cargo_mass_kg = clampf(mass_kg, MIN_CARGO_MASS_KG, MAX_CARGO_MASS_KG)
+	_cargo_mass_kg = clampf(mass_kg, MIN_CARGO_MASS_KG, max_payload_mass_kg)
 	_cargo_offset_m = Vector3(
 		clampf(offset_m.x, CARGO_BAY_MIN.x, CARGO_BAY_MAX.x),
 		clampf(offset_m.y, CARGO_BAY_MIN.y, CARGO_BAY_MAX.y),
@@ -82,9 +85,9 @@ func load_preset(preset_name: String) -> void:
 		"EMPTY":
 			set_cargo(0.0, Vector3.ZERO, "EMPTY")
 		"HALF_CENTERED":
-			set_cargo(12500.0, Vector3.ZERO, "HALF_CENTERED")
+			set_cargo(max_payload_mass_kg * 0.5, Vector3.ZERO, "HALF_CENTERED")
 		"MAX_GROSS":
-			set_cargo(25000.0, Vector3.ZERO, "MAX_GROSS")
+			set_cargo(max_payload_mass_kg, Vector3.ZERO, "MAX_GROSS")
 		"PORT_HEAVY":
 			set_cargo(20000.0, Vector3(-3.0, 0.0, 0.0), "PORT_HEAVY")
 		"STARBOARD_HEAVY":
@@ -117,6 +120,7 @@ func get_telemetry() -> Dictionary:
 		"total_mass_kg": get_total_mass_kg(),
 		"cargo_offset_m": _cargo_offset_m,
 		"center_of_mass_m": get_combined_center_of_mass_m(),
+		"max_payload_kg": max_payload_mass_kg,
 		"max_gross_kg": dry_mass_kg + max_payload_mass_kg,
 		"load_fraction": _cargo_mass_kg / maxf(max_payload_mass_kg, 1.0),
 		"hover_throttle_estimate": get_hover_throttle_estimate(),

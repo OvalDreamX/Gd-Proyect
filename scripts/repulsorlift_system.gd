@@ -107,16 +107,24 @@ func apply_flight_control_forces(
 		roll_command: float,
 		yaw_command: float,
 		vane_redistribution_fraction: float = 0.0,
-		maximum_vane_output_multiplier: float = 1.2
+		maximum_vane_output_multiplier: float = 1.2,
+		delta_seconds: float = 0.0
 ) -> void:
 	_reset_frame_output(field_online, power_output, vector_angle_degrees, pitch_command, roll_command, yaw_command)
 
 	if not is_instance_valid(_ship) or not is_instance_valid(_vane_controller):
 		return
+
+	var thermal_delta: float = delta_seconds
+	if thermal_delta <= 0.000001:
+		thermal_delta = 1.0 / maxf(float(Engine.physics_ticks_per_second), 1.0)
+
 	if _ship.freeze or not field_online:
+		_step_vane_thermal(thermal_delta, false)
 		_update_force_debug()
 		return
 	if _ship.mass <= MINIMUM_MASS_KG or not _vane_controller.is_configuration_valid():
+		_step_vane_thermal(thermal_delta, true)
 		_update_force_debug()
 		return
 
@@ -141,23 +149,31 @@ func apply_flight_control_forces(
 		var local_up: Vector3 = -_ship.get_gravity().normalized()
 		_last_vertical_twr = maxf(_last_total_force.dot(local_up), 0.0) / (_ship.mass * _last_gravity_magnitude)
 
-	# Step Phase 2S vane thermal simulation
-	var ambient_temp: float = -10.0
-	var atmosphere_node: Node = _ship.get_node_or_null("AtmosphericFlightModel")
-	if atmosphere_node != null and "ambient_temperature_celsius" in atmosphere_node:
-		ambient_temp = float(atmosphere_node.ambient_temperature_celsius)
-	_vane_controller.update_thermal_simulation(
-		_ship.get_physics_process_delta_time(),
-		ambient_temp,
-		field_online,
-		_last_power_output,
-		_last_vector_angle_degrees,
-		_last_pitch_command,
-		_last_roll_command,
-		_last_yaw_command
-	)
+	# Thermal load combines the current main-vector allocation with the actual
+	# per-vane force contributions produced by the maneuver allocator.
+	_step_vane_thermal(thermal_delta, true)
 
 	_update_force_debug()
+
+
+func _step_vane_thermal(delta: float, field_online: bool) -> void:
+	if not is_instance_valid(_vane_controller):
+		return
+	var ambient_temp: float = -10.0
+	var atmosphere_node: Node = _ship.get_node_or_null("AtmosphericFlightModel") if is_instance_valid(_ship) else null
+	if atmosphere_node != null and "ambient_temperature_celsius" in atmosphere_node:
+		ambient_temp = float(atmosphere_node.ambient_temperature_celsius)
+
+	var loads: Dictionary = {}
+	if field_online:
+		var force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
+		loads = _vane_controller.calculate_thermal_loads(
+			_last_power_output,
+			_last_vector_angle_degrees,
+			_last_vane_contributions,
+			force_newtons_per_twr
+		)
+	_vane_controller.update_thermal_simulation(delta, ambient_temp, field_online, loads)
 
 
 func _reset_frame_output(
@@ -204,15 +220,20 @@ func _apply_main_vector(body_basis: Basis, center_of_mass_world: Vector3, force_
 	if _last_main_force.length_squared() <= MINIMUM_FORCE_SQUARED:
 		return
 
-	# The primary field resultant acts through the COM. It translates the ship
-	# without introducing an arbitrary neutral-state pitch/roll oscillation.
-	_ship.apply_central_force(_last_main_force)
+	# The ship-wide field resultant is applied at the fixed hull reference datum
+	# (the rigid-body origin), not magically through the moving COM. An offset
+	# cargo COM therefore creates a real lever arm and attitude moment. With the
+	# empty ship's COM at the origin, this remains a zero-moment main resultant.
+	var application_point_world: Vector3 = _ship.global_position
+	_ship.apply_force(_last_main_force, Vector3.ZERO)
+	var main_torque: Vector3 = (application_point_world - center_of_mass_world).cross(_last_main_force)
 	_last_total_force += _last_main_force
+	_last_total_torque += main_torque
 	_last_force_vectors.append({
 		"name": "MAIN FIELD VECTOR",
 		"kind": "main",
 		"force_world": _last_main_force,
-		"application_point_world": center_of_mass_world,
+		"application_point_world": application_point_world,
 	})
 
 

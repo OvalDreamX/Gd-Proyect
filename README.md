@@ -1,61 +1,50 @@
-# Space Trucker — Phase 2A Prototype
+# Space Trucker — Flight and Ship Systems Prototype
 
-**Target engine:** Godot 4.7.2 Stable (GDScript, standard edition; no .NET required)
+**Engine:** Godot 4.7.2 Stable (GDScript, GL Compatibility)  
+**Platform target:** Windows PC  
+**Main scene:** `res://scenes/test_range.tscn`
 
-Phase 2A adds ship-owned repulsorlift activation-state handling, initial ship command collection, and a telemetry HUD. It builds on the original first-person walk-up/cockpit-entry slice.
+Space Trucker is a single-player ship-operations and space-trucking prototype. The current build focuses on walk-up/cockpit entry, assisted ship flight, propulsion-vane behavior, cockpit instrumentation, cargo mass distribution and thermal limits.
 
-## Implemented
+## Current prototype systems
 
-- Existing first-person walking and cockpit-entry transition are preserved.
-- A `ShipFlightController` node is attached to the ship's existing `RigidBody3D` root.
-- Pressing F in the cockpit changes the field state through `OFF -> STARTING -> ONLINE`; pressing F again aborts startup or switches the field OFF.
-- W/S changes the field-power command while ONLINE.
-- Q/E continuously changes the vector-distribution command between 0 and 110 degrees.
-- A/D produces a normalized yaw command for telemetry.
-- A neutral-input interlock prevents keys held during field startup from becoming unintended commands when the field comes ONLINE.
-- A separate `FlightHUD` displays the command values and clearly reports that force output is not connected.
-- The HUD is visible only after the cockpit-entry transition is complete.
+- Single `RigidBody3D` ship with simplified Newtonian motion.
+- Repulsorlift main-vector translation and vane-based pitch/roll/yaw forces.
+- Flight-control computer with assisted rate control and direct-vane mode.
+- Atmospheric drag, wind and shield-generated glide lift.
+- Sensor-data boundary for attitude, heading, velocity and altitude instruments.
+- Inertial flight-path marker with clipped edge cue.
+- Cockpit and external camera, cockpit recentering, F3 diagnostics and display settings.
+- Per-vane temperature, load, wear, degradation and sputtering.
+- Cargo manifest with payload mass and center-of-mass offset.
+
+The prototype is not yet a complete cargo economy, planetary environment, spaceport or orbital simulation. Keep the test range as the flight-model regression scene.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| W / A / S / D | Walk outside the ship; field power / yaw telemetry while seated and ONLINE |
-| Mouse | Look around outside the ship |
-| Space | Jump |
-| F near the ship | Enter cockpit |
-| F while seated | Start/abort/stop the repulsorlift field |
-| W / S while field ONLINE | Increase/decrease field-power command |
-| Q / E while field ONLINE | Move vector distribution continuously from 0 to 110 degrees |
-| A / D while field ONLINE | Yaw command telemetry (-1 to +1) |
-| Escape | Release mouse capture while walking |
+| F near ship / while seated | Enter cockpit / toggle repulsorlift field |
+| W / S | Increase / decrease main-vector power |
+| Q / E | Change main-vector direction |
+| Mouse | Pitch/roll virtual-stick commands |
+| A / D | Yaw |
+| RMB | Toggle camera-look mode |
+| C | Switch cockpit/external camera |
+| Mouse wheel | Zoom external camera |
+| F3 | Diagnostics and force visualization |
+| F4 | Cargo manifest |
+| F10 | Display settings |
+| Escape | Close F4/F10 panel |
 
-## Explicit scope boundary
+Input mappings in `project.godot` remain authoritative.
 
-**The ship does not fly in Phase 2A.** The rigid body remains frozen, and the new controller does not call force, impulse or torque APIs or modify the ship's transform/velocity. Field power starts at zero. W/S, Q/E and A/D currently produce command values only.
+## Development notes
 
-Mouse pitch/roll input, external camera, RMB camera-look mode and F3 debug overview are reserved for Phase 2B. Vane definitions, force/torque calculations, FCC and actual rigid-body integration remain later milestones. The GDD's Step 1 rigid-body validation must be completed before collective lift is connected to physics.
+Read:
+- `docs/GAME_DESIGN_DOCUMENT_v0_1.md` — design authority.
+- `docs/DEVELOPMENT_CHANGELOG.md` — implementation ledger.
+- `docs/AI_HANDOFF.md` — architecture and workflow constraints.
+- `INSTALL_PHASE_2U_POLISH.md` — latest polish pass and verification commands.
 
-## Run
-
-Open the project in Godot 4.7.2 Stable and press F5 to run the configured main scene. Walk to the freighter, enter the cockpit using the existing prompt, and test the seated controls above.
-
-## Project structure
-
-```text
-res://
-  project.godot
-  scenes/
-    test_range.tscn
-    player.tscn
-    ship.tscn
-  scripts/
-    player_controller.gd
-    ship_interactable.gd
-    ship_flight_controller.gd
-    flight_hud.gd
-```
-
-## Next validation
-
-Follow `INSTALL_PHASE_2A.md` for the acceptance-test sequence. The immediate next implementation should be chosen after Phase 2A has been run on the target Godot 4.7.2 installation and its results have been reviewed.
+Do not claim a milestone is runtime-validated until its Godot tests have actually been run.

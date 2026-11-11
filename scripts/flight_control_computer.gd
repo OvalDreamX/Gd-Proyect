@@ -2,10 +2,9 @@ extends Node
 class_name FlightControlComputer
 
 ## Converts pilot rotation-rate requests into bounded vane-control commands.
-## This is a proportional angular-rate controller, not an attitude-hold system:
-## zero input requests zero angular rate, but never requests a return to level.
-## The controller has no integral term, so it cannot accumulate windup while
-## the field is offline or the available vane authority is saturated.
+## Assisted mode uses a bounded PI rate controller: the integral term can retain
+## a small trim command against persistent moments, but it is not an attitude
+## hold system and cannot exceed the configured vane-output authority.
 
 @export_category("Requested rotational rates")
 @export_range(5.0, 90.0, 1.0) var maximum_pitch_rate_degrees_per_second: float = 32.0
@@ -16,6 +15,11 @@ class_name FlightControlComputer
 ## Proportional response to normalized angular-rate error. Higher values
 ## accelerate the response but reach the output limit sooner.
 @export_range(0.1, 4.0, 0.05) var rate_response_gain: float = 0.8
+## Integral response to persistent rate error. This retains trim against a
+## steady disturbance such as an off-centre cargo load.
+@export_range(0.0, 0.5, 0.01) var rate_integral_gain: float = 0.12
+## Hard bound on the retained integral trim contribution per axis.
+@export_range(0.0, 0.4, 0.01) var maximum_integral_trim_output: float = 0.25
 ## Hard limit on each FCC vane command. The initial 0.8 cap preserves some
 ## response margin so normal assistance cannot fully conceal vane faults.
 ## Vane condition and power impose additional physical limits after this cap.
@@ -32,10 +36,17 @@ const VANE_REDISTRIBUTION_FRACTION: float = 0.50
 const MAXIMUM_VANE_OUTPUT_MULTIPLIER: float = 1.20
 
 var assistance_enabled: bool = true
+var _integral_trim_output_by_axis: Vector3 = Vector3.ZERO
 
 
 func set_assistance_enabled(enabled: bool) -> void:
 	assistance_enabled = enabled
+	if not assistance_enabled:
+		reset_integral_trim()
+
+
+func reset_integral_trim() -> void:
+	_integral_trim_output_by_axis = Vector3.ZERO
 
 
 func calculate_control_outputs(
@@ -44,7 +55,8 @@ func calculate_control_outputs(
 		pilot_yaw_request: float,
 		angular_velocity_world: Vector3,
 		ship_basis: Basis,
-		control_available: bool
+		control_available: bool,
+		delta_seconds: float = 0.0
 ) -> Dictionary:
 	var pitch_request: float = _condition_input(pilot_pitch_request)
 	var roll_request: float = _condition_input(pilot_roll_request)
@@ -85,14 +97,36 @@ func calculate_control_outputs(
 	var roll_saturated: bool = false
 	var yaw_saturated: bool = false
 
+	if not control_available or not assistance_enabled:
+		reset_integral_trim()
+
 	if control_available:
 		if assistance_enabled:
-			raw_output_by_axis = Vector3(
+			# Output-axis signs match the pre-existing direct vane mapping.
+			var output_rate_error := Vector3(
 				normalized_rate_error.x,
 				-normalized_rate_error.y,
 				-normalized_rate_error.z
-			) * rate_response_gain
+			)
+			var proportional_output: Vector3 = output_rate_error * rate_response_gain
 			var output_limit: float = clampf(maximum_control_output, 0.0, 1.0)
+			var integration_delta: float = maxf(delta_seconds, 0.0)
+
+			if integration_delta > 0.0 and rate_integral_gain > 0.0:
+				_integral_trim_output_by_axis.x = _integrate_axis(
+					_integral_trim_output_by_axis.x, output_rate_error.x,
+					proportional_output.x, integration_delta, output_limit
+				)
+				_integral_trim_output_by_axis.y = _integrate_axis(
+					_integral_trim_output_by_axis.y, output_rate_error.y,
+					proportional_output.y, integration_delta, output_limit
+				)
+				_integral_trim_output_by_axis.z = _integrate_axis(
+					_integral_trim_output_by_axis.z, output_rate_error.z,
+					proportional_output.z, integration_delta, output_limit
+				)
+
+			raw_output_by_axis = proportional_output + _integral_trim_output_by_axis
 			output_by_axis = Vector3(
 				clampf(raw_output_by_axis.x, -output_limit, output_limit),
 				clampf(raw_output_by_axis.y, -output_limit, output_limit),
@@ -122,6 +156,8 @@ func calculate_control_outputs(
 		"fcc_rate_error_local_rad_s": rate_error_local,
 		"fcc_raw_control_output_by_axis": raw_output_by_axis,
 		"fcc_control_output_by_axis": output_by_axis,
+		"fcc_integral_trim_output_by_axis": _integral_trim_output_by_axis,
+		"fcc_trim_active": _integral_trim_output_by_axis.length() > 0.01,
 		"fcc_pitch_output": output_by_axis.x,
 		"fcc_yaw_output": output_by_axis.y,
 		"fcc_roll_output": output_by_axis.z,
@@ -130,10 +166,37 @@ func calculate_control_outputs(
 		"fcc_yaw_saturated": yaw_saturated,
 		"fcc_any_axis_saturated": pitch_saturated or roll_saturated or yaw_saturated,
 		"fcc_rate_response_gain": rate_response_gain,
+		"fcc_rate_integral_gain": rate_integral_gain,
+		"fcc_maximum_integral_trim_output": maximum_integral_trim_output,
 		"fcc_maximum_control_output": maximum_control_output,
 		"fcc_vane_redistribution_fraction": VANE_REDISTRIBUTION_FRACTION if assistance_enabled else 0.0,
 		"fcc_maximum_vane_output_multiplier": MAXIMUM_VANE_OUTPUT_MULTIPLIER,
 	}
+
+
+## Anti-windup: accept integral motion only while it remains inside the output
+## limit or moves a saturated proportional command back toward the valid range.
+func _integrate_axis(
+		current_integral: float,
+		error_for_output: float,
+		proportional_output: float,
+		delta_seconds: float,
+		output_limit: float
+) -> float:
+	var integral_limit: float = clampf(maximum_integral_trim_output, 0.0, 0.4)
+	var candidate: float = clampf(
+		current_integral + error_for_output * rate_integral_gain * delta_seconds,
+		-integral_limit,
+		integral_limit
+	)
+	var candidate_raw_output: float = proportional_output + candidate
+	if absf(candidate_raw_output) <= output_limit:
+		return candidate
+	if candidate_raw_output > output_limit and error_for_output < 0.0:
+		return candidate
+	if candidate_raw_output < -output_limit and error_for_output > 0.0:
+		return candidate
+	return current_integral
 
 
 ## Symmetric deadzone remapping followed by a smooth linear-to-cubic blend.

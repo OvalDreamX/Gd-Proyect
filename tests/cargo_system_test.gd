@@ -1,9 +1,9 @@
 extends SceneTree
 
-## Deterministic regression tests for CargoSystem (Phase 2T).
-## Verifies mass computation, center of mass offset, presets, and RigidBody3D integration.
+## Deterministic integration tests for CargoSystem (Phase 2T/2U).
+## Verifies manifest calculations against the actual ship RigidBody3D.
 
-const CARGO_SYSTEM_SCRIPT = preload("res://scripts/cargo_system.gd")
+const SHIP_SCENE = preload("res://scenes/ship.tscn")
 
 var _checks: int = 0
 var _failures: int = 0
@@ -14,73 +14,131 @@ func _initialize() -> void:
 
 
 func _run_tests() -> void:
-	print("[CARGO_SYSTEM_TEST] Running tests...")
-	var cargo = CARGO_SYSTEM_SCRIPT.new()
-	cargo.dry_mass_kg = 30000.0
-	cargo.max_payload_mass_kg = 25000.0
-	root.add_child(cargo)
-	await process_frame
+	print("[CARGO_SYSTEM_TEST] Running ship integration tests...")
+	var ship := SHIP_SCENE.instantiate() as ShipInteractable
+	if ship == null:
+		_fail("Could not instantiate the prototype freighter")
+		_finish()
+		return
 
-	# Test 1: Empty ship (0 payload)
+	root.add_child(ship)
+	await process_frame
+	await physics_frame
+
+	var cargo := ship.get_node_or_null("CargoSystem") as CargoSystem
+	var repulsorlift := ship.get_node_or_null("RepulsorliftSystem") as RepulsorliftSystem
+	if cargo == null or repulsorlift == null:
+		_fail("Ship scene is missing CargoSystem or RepulsorliftSystem")
+		ship.queue_free()
+		_finish()
+		return
+
+	_expect_near(cargo.dry_mass_kg, ship.get_design_dry_mass_kg(), 0.1, "Cargo subsystem derives dry mass from its parent ship")
+	_expect_near(cargo.max_payload_mass_kg, ship.max_payload_mass_kg, 0.1, "Cargo subsystem derives payload capacity from its parent ship")
+
 	cargo.load_preset("EMPTY")
 	_expect_near(cargo.get_total_mass_kg(), 30000.0, 0.1, "Empty ship total mass is 30,000 kg")
-	_expect(cargo.get_combined_center_of_mass_m().is_zero_approx(), "Empty ship COM is at origin (0, 0, 0)")
-	_expect_near(cargo.get_hover_throttle_estimate(), 30000.0 / (55000.0 * 1.10), 0.01, "Empty hover throttle is ~49.6%")
+	_expect_near(ship.mass, 30000.0, 0.1, "Empty manifest updates the actual RigidBody3D mass")
+	_expect(ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM, "Cargo system selects custom center of mass")
+	_expect(ship.center_of_mass.is_zero_approx(), "Empty ship COM is at the origin")
+	_expect_near(cargo.get_hover_throttle_estimate(), 30000.0 / (55000.0 * 1.10), 0.01, "Empty hover estimate is ~49.6%")
 
-	# Test 2: Max gross (25,000 kg payload centered)
 	cargo.load_preset("MAX_GROSS")
-	_expect_near(cargo.get_total_mass_kg(), 55000.0, 0.1, "Max gross total mass is 55,000 kg")
-	_expect(cargo.get_combined_center_of_mass_m().is_zero_approx(), "Centered max gross COM remains at origin")
-	_expect_near(cargo.get_hover_throttle_estimate(), 55000.0 / (55000.0 * 1.10), 0.01, "Max gross hover throttle is ~90.9%")
+	_expect_near(cargo.get_total_mass_kg(), 55000.0, 0.1, "Maximum payload produces 55,000 kg gross mass")
+	_expect_near(ship.mass, 55000.0, 0.1, "Maximum payload updates actual rigid-body mass")
+	_expect(ship.center_of_mass.is_zero_approx(), "Centered maximum payload leaves COM at origin")
+	_expect_near(cargo.get_hover_throttle_estimate(), 1.0 / 1.10, 0.01, "Maximum gross hover estimate is ~90.9%")
 
-	# Test 3: Port heavy asymmetric load (20,000 kg at X = -3.0m)
 	cargo.load_preset("PORT_HEAVY")
-	_expect_near(cargo.get_total_mass_kg(), 50000.0, 0.1, "Port heavy total mass is 50,000 kg")
 	var port_com: Vector3 = cargo.get_combined_center_of_mass_m()
-	var expected_x: float = (20000.0 * -3.0) / 50000.0 # -1.2m
-	_expect_near(port_com.x, expected_x, 0.01, "Port heavy shifts COM to X = -1.2m")
-	_expect_near(port_com.y, 0.0, 0.001, "Port heavy Y offset is 0.0m")
-	_expect_near(port_com.z, 0.0, 0.001, "Port heavy Z offset is 0.0m")
+	_expect_near(cargo.get_total_mass_kg(), 50000.0, 0.1, "Port-heavy preset produces 50,000 kg gross mass")
+	_expect_near(port_com.x, -1.2, 0.01, "Port-heavy cargo shifts COM to X = -1.2m")
+	_expect_near(ship.center_of_mass.x, -1.2, 0.01, "Port-heavy COM is applied to the actual RigidBody3D")
 
-	# Test 4: Nose heavy asymmetric load (20,000 kg at Z = -4.0m)
+	# The main field force is applied at the fixed hull datum, so this shifted
+	# COM creates a real moment. Gravity itself acts through the COM and is not
+	# incorrectly treated as a torque source.
+	repulsorlift.apply_flight_control_forces(
+		true, 0.9, 90.0, 0.0, 0.0, 0.0, 0.0, 1.2, 1.0 / 60.0
+	)
+	var lift_telemetry: Dictionary = repulsorlift.get_telemetry()
+	var lift_torque: Vector3 = lift_telemetry.get("lift_torque_vector", Vector3.ZERO)
+	_expect(lift_torque.z > 10000.0, "Offset COM produces a measurable roll moment from the main lift resultant")
+
 	cargo.load_preset("NOSE_HEAVY")
 	var nose_com: Vector3 = cargo.get_combined_center_of_mass_m()
-	var expected_z: float = (20000.0 * -4.0) / 50000.0 # -1.6m
-	_expect_near(nose_com.z, expected_z, 0.01, "Nose heavy shifts COM to Z = -1.6m forward")
+	_expect_near(nose_com.z, -1.6, 0.01, "Nose-heavy cargo shifts COM to Z = -1.6m")
+	_expect_near(ship.center_of_mass.z, -1.6, 0.01, "Nose-heavy COM is applied to the actual rigid body")
 
-	# Test 5: Starboard heavy asymmetric load (20,000 kg at X = +3.0m)
 	cargo.load_preset("STARBOARD_HEAVY")
-	var stbd_com: Vector3 = cargo.get_combined_center_of_mass_m()
-	_expect_near(stbd_com.x, 1.2, 0.01, "Starboard heavy shifts COM to X = +1.2m right")
+	_expect_near(ship.center_of_mass.x, 1.2, 0.01, "Starboard-heavy COM is applied to the actual rigid body")
 
-	# Test 6: Custom continuous adjustment
 	cargo.set_cargo(10000.0, Vector3(2.0, -0.5, 3.0), "CUSTOM")
-	_expect_near(cargo.get_total_mass_kg(), 40000.0, 0.1, "Custom mass is 40,000 kg")
 	var custom_com: Vector3 = cargo.get_combined_center_of_mass_m()
-	_expect_near(custom_com.x, (10000.0 * 2.0) / 40000.0, 0.01, "Custom COM X is 0.5m")
-	_expect_near(custom_com.y, (10000.0 * -0.5) / 40000.0, 0.01, "Custom COM Y is -0.125m")
-	_expect_near(custom_com.z, (10000.0 * 3.0) / 40000.0, 0.01, "Custom COM Z is 0.75m")
+	_expect_near(cargo.get_total_mass_kg(), 40000.0, 0.1, "Custom manifest produces 40,000 kg gross mass")
+	_expect_near(ship.mass, 40000.0, 0.1, "Custom manifest updates rigid-body mass")
+	_expect_near(custom_com.x, 0.5, 0.01, "Custom COM X is 0.5m")
+	_expect_near(custom_com.y, -0.125, 0.01, "Custom COM Y is -0.125m")
+	_expect_near(custom_com.z, 0.75, 0.01, "Custom COM Z is 0.75m")
+	_expect_near_vector(ship.center_of_mass, custom_com, 0.001, "Custom COM is written to the RigidBody3D")
 
-	print("\n[CARGO_SYSTEM_TEST] Finished: %d checks, %d failures" % [_checks, _failures])
-	if _failures > 0:
-		quit(1)
+	# The subsystem must never exceed the parent ship's current payload rating.
+	cargo.set_cargo(99999.0, Vector3.ZERO, "OVERLOAD_TEST")
+	_expect_near(cargo.get_cargo_mass_kg(), ship.max_payload_mass_kg, 0.1, "Custom payload is clamped to the ship-authored capacity")
+	_expect_near(ship.mass, ship.get_design_dry_mass_kg() + ship.max_payload_mass_kg, 0.1, "Clamped payload keeps gross mass within design rating")
+
+	# Thermal state must continue cooling through the RepulsorliftSystem call
+	# path even when the field is offline.
+	var vane_controller := ship.get_node_or_null("VaneController") as VaneController
+	if vane_controller == null:
+		_fail("Ship scene is missing VaneController for offline thermal integration test")
 	else:
-		quit(0)
+		vane_controller.set_vane_temperature(&"bottom_front_left", 120.0)
+		var initial_integrity: float = _vane_integrity(vane_controller, &"bottom_front_left")
+		for _tick in range(120):
+			repulsorlift.apply_flight_control_forces(
+				false, 0.0, 90.0, 0.0, 0.0, 0.0, 0.0, 1.2, 1.0 / 60.0
+			)
+		var cooled_temperature: float = vane_controller.get_vane_temperature(&"bottom_front_left")
+		_expect(cooled_temperature < 120.0, "Repulsorlift integration cools vanes while field is offline")
+		_expect_near(vane_controller.get_vane_wear_rate(&"bottom_front_left"), 0.0, 0.000001, "Offline thermal integration accrues no operating wear")
+		_expect_near(_vane_integrity(vane_controller, &"bottom_front_left"), initial_integrity, 0.000001, "Offline cooling preserves vane integrity")
+
+	ship.queue_free()
+	print("[CARGO_SYSTEM_TEST] Finished: %d checks, %d failures" % [_checks, _failures])
+	quit(1 if _failures > 0 else 0)
+
+
+func _vane_integrity(controller: VaneController, vane_id: StringName) -> float:
+	for vane_value in controller.get_telemetry().get("vane_states", []):
+		var vane: Dictionary = vane_value
+		if vane.get("vane_id") == vane_id:
+			return float(vane.get("integrity", 0.0))
+	return 0.0
 
 
 func _expect(condition: bool, message: String) -> void:
 	_checks += 1
 	if not condition:
 		_failures += 1
-		printerr("  FAIL: %s" % message)
+		printerr("FAIL: %s" % message)
 	else:
-		print("  PASS: %s" % message)
+		print("PASS: %s" % message)
 
 
 func _expect_near(actual: float, expected: float, tolerance: float, message: String) -> void:
-	_checks += 1
-	if absf(actual - expected) > tolerance:
-		_failures += 1
-		printerr("  FAIL: %s (expected %.3f, got %.3f)" % [message, expected, actual])
-	else:
-		print("  PASS: %s (%.3f ≈ %.3f)" % [message, actual, expected])
+	_expect(absf(actual - expected) <= tolerance, "%s (expected %.3f, got %.3f)" % [message, actual, expected])
+
+
+func _expect_near_vector(actual: Vector3, expected: Vector3, tolerance: float, message: String) -> void:
+	_expect(actual.distance_to(expected) <= tolerance, "%s (actual %s, expected %s)" % [message, str(actual), str(expected)])
+
+
+func _fail(message: String) -> void:
+	_failures += 1
+	printerr("FAIL: %s" % message)
+
+
+func _finish() -> void:
+	print("[CARGO_SYSTEM_TEST] Finished: %d checks, %d failures" % [_checks, _failures])
+	quit(1 if _failures > 0 else 0)

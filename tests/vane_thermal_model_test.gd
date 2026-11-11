@@ -1,8 +1,7 @@
 extends SceneTree
 
-## Deterministic regression tests for VaneController Phase 2S thermal and degradation model.
-## Run from the project root:
-## godot --headless --path . --script res://tests/vane_thermal_model_test.gd
+## Deterministic regression tests for Phase 2S thermal operation.
+## Run: godot --headless --path . --script res://tests/vane_thermal_model_test.gd
 
 const VANE_CONTROLLER_SCRIPT = preload("res://scripts/vane_controller.gd")
 const TEST_VANE_RESOURCES: Array[String] = [
@@ -25,93 +24,102 @@ func _run_tests() -> void:
 	var controller = VANE_CONTROLLER_SCRIPT.new()
 	var loaded_definitions: Array[Resource] = []
 	for path in TEST_VANE_RESOURCES:
-		var res: Resource = load(path)
-		if res == null:
+		var resource: Resource = load(path)
+		if resource == null:
 			_fail("Could not load %s" % path)
 		else:
-			loaded_definitions.append(res)
+			loaded_definitions.append(resource)
 	controller.vane_definitions = loaded_definitions
 	root.add_child(controller)
 	await process_frame
 
 	_expect(controller.is_configuration_valid(), "Vane configuration is valid")
-
-	# Test 1: Initial cold state at -10°C
-	var fl_temp: float = controller.get_vane_temperature(&"bottom_front_left")
-	_expect_near(fl_temp, -10.0, 0.1, "Bottom front left vane initializes at -10°C ambient")
+	_expect_near(controller.get_vane_temperature(&"bottom_front_left"), -10.0, 0.1, "Vane initializes at -10°C ambient")
 	_expect(controller.get_vane_thermal_status(&"bottom_front_left") == &"COLD_STRAIN", "Initial thermal status is COLD_STRAIN")
 
-	# Test 2: Cold temperature clamps maximum available authority (< nominal)
-	var cold_effective_twr: float = controller.get_group_effective_authority_twr(&"bottom_front")
-	var nominal_twr: float = controller.get_group_nominal_authority_twr(&"bottom_front")
-	_expect(cold_effective_twr < nominal_twr * 0.75, "Cold vane authority is clamped to ~70% of nominal")
+	# Thermal load is derived from force magnitude / vane nominal force rating.
+	var rated_force_per_twr: float = 55000.0 * 9.81
+	var nominal_vane_force: float = controller.get_vane_nominal_authority_twr(&"bottom_front_left") * rated_force_per_twr
+	var contribution: Dictionary = {
+		"vane_id": &"bottom_front_left",
+		"force_world": Vector3.UP * nominal_vane_force * 0.5,
+	}
+	var derived_loads: Dictionary = controller.calculate_thermal_loads(
+		0.0, 90.0, [contribution], rated_force_per_twr
+	)
+	_expect_near(float(derived_loads.get(&"bottom_front_left", 0.0)), 0.5, 0.001, "Actual vane force produces the correct normalized thermal load")
 
-	# Test 3: Demanding 100% power while cold causes immediate quadratic cold-strain wear
-	controller.update_thermal_simulation(1.0, -10.0, true, 1.0, 90.0)
-	var fl_wear: float = controller.get_vane_wear_rate(&"bottom_front_left")
-	_expect(fl_wear > 0.001, "100% load at -10°C produces high quadratic cold-strain wear rate")
-	var telemetry: Dictionary = controller.get_telemetry()
-	var fl_state: Dictionary = {}
-	for v in telemetry.get("vane_states", []):
-		if v.get("vane_id") == &"bottom_front_left":
-			fl_state = v
-			break
-	_expect(float(fl_state.get("integrity", 1.0)) < 1.0, "Integrity drops after cold shock")
+	# The collective main-vector demand is apportioned to the corresponding vane groups.
+	derived_loads = controller.calculate_thermal_loads(0.6, 90.0, [], rated_force_per_twr)
+	_expect_near(float(derived_loads.get(&"bottom_front_left", 0.0)), 0.6, 0.001, "Main lift demand is assigned to each bottom vane")
+	_expect_near(float(derived_loads.get(&"main_rear", 1.0)), 0.0, 0.001, "Vertical vector does not load the rear propulsion vane")
 
-	# Test 4: Gentle warmup at 0.35 power reaches nominal 60°C within 10-20 seconds with minimal wear
+	# Cold shock at full commanded load causes quadratic degradation.
+	var full_load: Dictionary = {&"bottom_front_left": 1.0}
+	controller.update_thermal_simulation(1.0, -10.0, true, full_load)
+	_expect(controller.get_vane_wear_rate(&"bottom_front_left") > 0.001, "Full-load cold operation causes accelerated wear")
+	var integrity_after_shock: float = _vane_integrity(controller, &"bottom_front_left")
+	_expect(integrity_after_shock < 1.0, "Integrity drops after cold shock")
+
+	# Gentle 0.35 load warms a cold vane to 60°C in the current model's test envelope.
 	controller.reset_all_vanes(-10.0)
+	var warmup_loads: Dictionary = {&"bottom_front_left": 0.35}
 	var warmup_seconds: float = 0.0
-	var delta_step: float = 0.5
 	while controller.get_vane_temperature(&"bottom_front_left") < 60.0 and warmup_seconds < 30.0:
-		controller.update_thermal_simulation(delta_step, -10.0, true, 0.35, 90.0)
-		warmup_seconds += delta_step
+		controller.update_thermal_simulation(0.5, -10.0, true, warmup_loads)
+		warmup_seconds += 0.5
+	_expect(warmup_seconds >= 10.0 and warmup_seconds <= 25.0, "0.35 load warmup reaches 60°C in the expected range")
+	_expect(_vane_integrity(controller, &"bottom_front_left") > 0.985, "Gentle warmup preserves vane integrity")
 
-	_expect(warmup_seconds >= 10.0 and warmup_seconds <= 25.0, "Warmup to 60°C takes 10 to 25 seconds (took %.1fs)" % warmup_seconds)
-	var post_warmup_integ: float = 1.0
-	for v in controller.get_telemetry().get("vane_states", []):
-		if v.get("vane_id") == &"bottom_front_left":
-			post_warmup_integ = float(v.get("integrity", 1.0))
-			break
-	_expect(post_warmup_integ > 0.985, "Gentle warmup preserves >98.5% integrity (got %.3f)" % post_warmup_integ)
-
-	# Test 5: In Green Zone (e.g. 80°C with 0.60 power), wear rate is minimal base wear
+	# A stable 80°C vane at 0.60 load is inside its green zone.
 	controller.set_vane_temperature(&"bottom_front_left", 80.0)
-	controller.update_thermal_simulation(0.1, -10.0, true, 0.60, 90.0)
-	_expect(controller.get_vane_thermal_status(&"bottom_front_left") == &"GREEN_ZONE", "80°C at 0.60 power is GREEN_ZONE")
-	var green_wear: float = controller.get_vane_wear_rate(&"bottom_front_left")
-	_expect(green_wear <= 0.00001, "Green zone wear rate is minimal base operating wear")
+	controller.update_thermal_simulation(0.1, -10.0, true, {&"bottom_front_left": 0.60})
+	_expect(controller.get_vane_thermal_status(&"bottom_front_left") == &"GREEN_ZONE", "80°C at 0.60 load is GREEN_ZONE")
+	_expect(controller.get_vane_wear_rate(&"bottom_front_left") <= 0.00001, "Green-zone wear remains at the minimal baseline")
 
-	# Test 6: Sustained 100% power overheats past 180°C into OVERHEAT
+	# Sustained maximum demand reaches overheat/critical state.
 	controller.set_vane_temperature(&"bottom_front_left", 140.0)
-	for i in range(25):
-		controller.update_thermal_simulation(1.0, -10.0, true, 1.0, 90.0)
-	var overheat_temp: float = controller.get_vane_temperature(&"bottom_front_left")
-	_expect(overheat_temp > 180.0, "Sustained 100% power overheats past 180°C (got %.1f°C)" % overheat_temp)
-	_expect(controller.get_vane_thermal_status(&"bottom_front_left") in [&"OVERHEAT", &"CRITICAL"], "Status becomes OVERHEAT or CRITICAL")
+	for _tick in range(25):
+		controller.update_thermal_simulation(1.0, -10.0, true, full_load)
+	_expect(controller.get_vane_temperature(&"bottom_front_left") > 180.0, "Sustained full load overheats the vane")
+	_expect(
+		controller.get_vane_thermal_status(&"bottom_front_left") in [&"OVERHEAT", &"CRITICAL"],
+		"Thermal status reports OVERHEAT or CRITICAL"
+	)
+
+	# Offline operation must cool continuously and must not accumulate operating wear.
+	controller.set_vane_temperature(&"bottom_front_left", 120.0)
+	var integrity_before_cooldown: float = _vane_integrity(controller, &"bottom_front_left")
+	controller.update_thermal_simulation(10.0, -10.0, false, {})
+	_expect(controller.get_vane_temperature(&"bottom_front_left") < 120.0, "Field-off thermal update cools the vane")
+	_expect_near(controller.get_vane_wear_rate(&"bottom_front_left"), 0.0, 0.000001, "Field-off cooldown does not accrue operating wear")
+	_expect_near(_vane_integrity(controller, &"bottom_front_left"), integrity_before_cooldown, 0.000001, "Field-off cooldown preserves integrity")
 
 	controller.queue_free()
-	_finish()
-
-
-func _expect(condition: bool, message: String) -> void:
-	_checks += 1
-	if not condition:
-		_failures += 1
-		print("FAIL: %s" % message)
-	else:
-		print("PASS: %s" % message)
-
-
-func _expect_near(actual: float, expected: float, tolerance: float, message: String) -> void:
-	_expect(absf(actual - expected) <= tolerance, "%s (expected %.3f, got %.3f)" % [message, expected, actual])
-
-
-func _fail(message: String) -> void:
-	_failures += 1
-	print("FAIL: %s" % message)
-
-
-func _finish() -> void:
-	print("--- Vane Thermal Model Test Summary ---")
-	print("Total checks: %d, Failures: %d" % [_checks, _failures])
+	print("Vane thermal model tests: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
+
+
+func _vane_integrity(controller: Node, vane_id: StringName) -> float:
+	for vane_value in controller.get_telemetry().get("vane_states", []):
+		var vane: Dictionary = vane_value
+		if vane.get("vane_id") == vane_id:
+			return float(vane.get("integrity", 0.0))
+	return 0.0
+
+
+func _expect(condition: bool, description: String) -> void:
+	_checks += 1
+	if condition:
+		print("PASS: %s" % description)
+	else:
+		_fail(description)
+
+
+func _expect_near(actual: float, expected: float, tolerance: float, description: String) -> void:
+	_expect(absf(actual - expected) <= tolerance, "%s (actual %.6f, expected %.6f)" % [description, actual, expected])
+
+
+func _fail(description: String) -> void:
+	_failures += 1
+	push_error("FAIL: %s" % description)

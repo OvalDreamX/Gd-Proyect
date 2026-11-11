@@ -1,76 +1,51 @@
-# Phase 2T — Cargo Manifest, Center of Mass & FCC Asymmetry Compensation
+# Phase 2T — Cargo Manifest, Mass and Center of Mass (current behavior after 2U)
 
-## Install
-1. Close the running game/editor.
-2. Extract the `Space_Trucker_Phase_2T_Cargo_System.zip` overwrite ZIP into your Godot project root (the folder containing `project.godot`).
-3. Allow the files to overwrite their matching paths:
-   - `scripts/cargo_system.gd`
-   - `scripts/ship_interactable.gd`
-   - `scripts/ship_flight_controller.gd`
-   - `scripts/flight_hud.gd`
-   - `scenes/ship.tscn`
-   - `tests/cargo_system_test.gd`
-4. Open the project in Godot 4.7.2.
+## Cargo subsystem
 
----
+`CargoSystem` is a dedicated node on the ship. It derives dry mass and payload capacity from its parent `ShipInteractable`; those ratings are no longer duplicated as independent cargo-system settings.
 
-## What Changed in Phase 2T
+It models an abstract payload mass and a payload position within the hold. The combined center of mass is:
 
-### 1. Independent Cargo Subsystem (`scripts/cargo_system.gd`)
-- Dedicated `CargoSystem` node attached directly to `PrototypeFreighter`.
-- Manages payload mass from **0.0 kg to 25,000.0 kg** (gross rating up to **55,000.0 kg**).
-- Computes combined ship Center of Mass (COM) in local ship coordinates:
-  $$\vec{R}_{\text{COM}} = \frac{M_{\text{cargo}} \cdot \vec{R}_{\text{cargo}}}{M_{\text{dry}} + M_{\text{cargo}}}$$
-- Dynamically sets Godot's `RigidBody3D`:
-  - `_ship.mass = total_mass`
-  - `_ship.center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM`
-  - `_ship.center_of_mass = combined_com`
-- **Single RigidBody3D Law Preserved:** Vanes remain fixed mathematical actuators at physical mount positions; they are never displaced or jointed.
+\[
+\vec R_{COM} = \frac{M_{cargo}\vec R_{cargo}}{M_{dry}+M_{cargo}}
+\]
 
-### 2. Interactive In-Game Cargo Manifest Panel (**F4 Key**)
-- Pressing **F4** anywhere in flight or on the ground opens the **Cargo Manifest & FCC Compliance Panel**.
-- **Mouse Release:** Toggling F4 releases the cursor (`Input.MOUSE_MODE_VISIBLE`) and freezes flight control inputs so the pilot can safely click sliders and buttons. Pressing **F4** again or **Escape** closes the panel and re-captures the mouse for flight.
-- **Quick Preset Buttons:**
-  - `[EMPTY (30t)]`: 0 kg payload, COM at origin, hover throttle ~49.6%.
-  - `[HALF (42.5t)]`: 12,500 kg payload centered, hover throttle ~70.5%.
-  - `[MAX GROSS (55t)]`: 25,000 kg payload centered, hover throttle ~90.9%.
-  - `[PORT HEAVY (-1.2m)]`: 20,000 kg offset 3m to port ($X = -3.0\text{m}$). Shifts ship COM to $X = -1.2\text{m}$. Generates **~588 kN·m** roll moment!
-  - `[STBD HEAVY (+1.2m)]`: 20,000 kg offset 3m to starboard ($X = +3.0\text{m}$). Shifts ship COM to $X = +1.2\text{m}$.
-  - `[NOSE HEAVY (-1.6m)]`: 20,000 kg offset 4m forward ($Z = -4.0\text{m}$). Shifts ship COM to $Z = -1.6\text{m}$. Generates **~784 kN·m** pitch moment!
-  - `[AFT HEAVY (+1.6m)]`: 20,000 kg offset 4m aft ($Z = +4.0\text{m}$). Shifts ship COM to $Z = +1.6\text{m}$.
-- **Interactive Sliders:**
-  - Payload Mass: 0 to 25,000 kg (step 250 kg)
-  - Port / Starboard (X): -4.0 m to +4.0 m
-  - Deck Vertical (Y): -1.0 m to +1.0 m
-  - Fore / Aft (Z): -6.0 m to +6.0 m
-- **Real-Time Physics Readout:**
-  - Active Preset & Payload Mass
-  - Total Gross Mass & % of 55t Gross Rating
-  - Combined Center of Mass Vector $(X, Y, Z)$
-  - Theoretical 1g Hover Throttle %
-  - FCC Trim Compensation Analysis
+The subsystem updates the actual `RigidBody3D.mass`, `center_of_mass_mode` and `center_of_mass`. Vane mount positions remain fixed.
 
-### 3. Flight Control Computer (FCC) Asymmetric Load Compensation
-- When the COM shifts off-center (e.g. port heavy), gravity acting at the shifted COM creates a continuous roll/pitch torque around the ship's geometric center.
-- The FCC stability augmentation loop senses the induced angular rate error and trims the opposing vanes (e.g., lowering starboard vane thrust or raising port vane thrust) to maintain steady level hover!
-- When you open the **F3 Diagnostics Panel**, the `[ CARGO & CENTER OF MASS (PHASE 2T) ]` section shows whether the ship is balanced or if active FCC trim compensation is engaged.
+The F4 panel provides mass and X/Y/Z offset sliders plus empty, half, maximum, port-heavy, starboard-heavy, nose-heavy and aft-heavy presets. The payload slider follows the ship-authored payload capacity.
 
----
+## 2U physical correction: where the torque comes from
 
-## Verification & Tests
+Gravity does not generate a torque merely because the center of mass moves. Gravity acts through the combined center of mass.
 
-Run the new headless regression test suite:
+The repulsorlift main-field resultant is now applied at the fixed ship/hull reference datum (the rigid-body origin), rather than being artificially applied through the current center of mass. An offset center of mass therefore creates a real lever arm:
+
+\[
+\vec \tau = (\vec r_{hull}-\vec r_{COM}) \times \vec F_{main}
+\]
+
+The empty ship retains its zero-offset baseline. An asymmetric manifest changes the main-field moment and therefore changes flight behavior.
+
+## 2U FCC trim correction
+
+Assisted FCC mode now uses a bounded PI angular-rate controller. Its integral term can retain a small counter-command against a persistent disturbance. The original proportional response, maximum output cap and vane redistribution limits remain in place. The integrator uses anti-windup and is cleared when control authority is unavailable or the pilot switches to direct-vane mode.
+
+This is **not** an attitude-hold system, and it does not guarantee level flight under every cargo arrangement. The trim output is bounded; if the induced moment exceeds available maneuver authority, the FCC saturates and residual rotation remains. This is intentional feedback, not a hidden unlimited compensation mechanism.
+
+The F4 panel and F3 diagnostics now describe that limitation accurately. F3 reports whether integral trim is active and whether the FCC is saturated.
+
+## Hover estimate
+
+The F4 hover-throttle figure remains a nominal 1g estimate based on the fixed 1.10 gross-TWR design rating. It excludes local gravity changes, vane thermal derating, damage and current force-allocation limits. Treat it as a planning figure, not a guaranteed hover setting.
+
+## Tests
+
 ```powershell
 & $godot --headless --path . --script res://tests/cargo_system_test.gd
-& $godot --headless --path . --script res://tests/vane_thermal_model_test.gd
+& $godot --headless --path . --script res://tests/flight_control_trim_test.gd
+& $godot --headless --path . --script res://tests/flight_hud_phase2u_test.gd
+& $godot --headless --path . --script res://tests/flight_control_computer_test.gd
 & $godot --headless --path . --script res://tests/vane_force_model_test.gd
 ```
 
-### In-Game Test Procedure (F5)
-1. Launch game (**F5**), board ship (**F**), start repulsorlift (**R**).
-2. Let vanes warm up gently to 60°C.
-3. Press **F4** to open the Cargo Manifest. Notice your mouse cursor appears.
-4. Click **[PORT HEAVY (-1.2m)]**. Observe the COM shift to $(-1.20, 0.00, 0.00)\text{m}$.
-5. Press **F4** or click **Resume Flight**.
-6. Take off with **W**. Observe how the FCC trims the vanes to hold the freighter level despite the massive 20-ton asymmetric load!
-7. Press **F3** to inspect individual vane force differences compensating for the off-center load.
+`cargo_system_test.gd` instantiates the actual ship scene and checks its rigid-body mass, custom COM, main-field induced torque, payload clamp and offline thermal cooling.

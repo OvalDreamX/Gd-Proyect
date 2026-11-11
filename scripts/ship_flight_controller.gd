@@ -1,6 +1,8 @@
 extends Node
 class_name ShipFlightController
 
+const PHASE_2U_HUD_SCRIPT = preload("res://scripts/flight_hud_phase_2u.gd")
+
 ## Ship-owned input and field-state controller.
 ## FlightControlComputer interprets pilot intent; RepulsorliftSystem remains
 ## the only component that calculates and applies physical flight forces.
@@ -90,7 +92,7 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 
-	_hud = FlightHUD.new()
+	_hud = PHASE_2U_HUD_SCRIPT.new() as FlightHUD
 	_hud.name = "FlightHUD"
 	add_child(_hud)
 	_hud.visible = false
@@ -149,7 +151,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ship_assist_toggle") and not _debug_interaction_mode:
 		_fcc.set_assistance_enabled(not _fcc.assistance_enabled)
 		_update_fcc_snapshot(
-			_field_state == FieldState.ONLINE and _field_power_output > 0.0001 and not _ship.freeze
+			_field_state == FieldState.ONLINE and not _ship.freeze
 		)
 		_publish_telemetry()
 		get_viewport().set_input_as_handled()
@@ -276,7 +278,8 @@ func _physics_process(delta: float) -> void:
 			_turn_field_off()
 		_update_fcc_snapshot(false)
 		_repulsorlift_system.apply_flight_control_forces(
-			false, 0.0, DEFAULT_VECTOR_DISTRIBUTION_DEGREES, 0.0, 0.0, 0.0
+			false, 0.0, DEFAULT_VECTOR_DISTRIBUTION_DEGREES, 0.0, 0.0, 0.0,
+			0.0, 1.2, delta
 		)
 		return
 
@@ -289,7 +292,7 @@ func _physics_process(delta: float) -> void:
 			telemetry_changed = false # _set_field_state() already published.
 
 	if _field_state == FieldState.ONLINE:
-		if not _hud.is_display_settings_open():
+		if not _hud.is_display_settings_open() and not _hud.is_cargo_manifest_open():
 			telemetry_changed = _update_online_commands(delta) or telemetry_changed
 		telemetry_changed = _update_actuator_outputs(delta) or telemetry_changed
 	elif not is_zero_approx(_yaw_command):
@@ -300,7 +303,7 @@ func _physics_process(delta: float) -> void:
 		_field_state == FieldState.ONLINE
 		and not _ship.freeze
 	)
-	_update_fcc_snapshot(control_available)
+	_update_fcc_snapshot(control_available, delta)
 
 	# The FCC turns pilot intent into bounded per-axis vane commands. The
 	# repulsorlift system still owns every force and torque calculation.
@@ -312,7 +315,8 @@ func _physics_process(delta: float) -> void:
 		float(_fcc_snapshot.get("fcc_roll_output", 0.0)),
 		float(_fcc_snapshot.get("fcc_yaw_output", 0.0)),
 		float(_fcc_snapshot.get("fcc_vane_redistribution_fraction", 0.0)),
-		float(_fcc_snapshot.get("fcc_maximum_vane_output_multiplier", 1.2))
+		float(_fcc_snapshot.get("fcc_maximum_vane_output_multiplier", 1.2)),
+		delta
 	)
 
 	if telemetry_changed:
@@ -324,17 +328,18 @@ func _physics_process(delta: float) -> void:
 		_publish_telemetry()
 
 
-func _update_fcc_snapshot(control_available: bool) -> void:
+func _update_fcc_snapshot(control_available: bool, delta_seconds: float = 0.0) -> void:
 	if not is_instance_valid(_fcc) or not is_instance_valid(_ship):
 		_fcc_snapshot.clear()
 		return
 	_fcc_snapshot = _fcc.calculate_control_outputs(
-			_pitch_command,
-			_roll_command,
-			_yaw_command,
-			_ship.angular_velocity,
-			_ship.global_basis,
-			control_available
+		_pitch_command,
+		_roll_command,
+		_yaw_command,
+		_ship.angular_velocity,
+		_ship.global_basis,
+		control_available,
+		delta_seconds
 	)
 
 
@@ -355,9 +360,6 @@ func _turn_field_off() -> void:
 	_pitch_command = 0.0
 	_roll_command = 0.0
 	_update_fcc_snapshot(false)
-	_repulsorlift_system.apply_flight_control_forces(
-		false, 0.0, _vector_distribution_actual_degrees, 0.0, 0.0, 0.0
-	)
 	_set_field_state(FieldState.OFF)
 
 

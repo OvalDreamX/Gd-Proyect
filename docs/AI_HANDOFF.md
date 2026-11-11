@@ -1,35 +1,48 @@
-# AI Handoff — Space Trucker (Current Flight Prototype)
+# AI Handoff — Space Trucker
 
-Read this file together with `GAME_DESIGN_DOCUMENT_v0_1.md` and `DEVELOPMENT_CHANGELOG.md`. The GDD is the design source of truth; the changelog records recent implementation milestones.
+Read this file together with `GAME_DESIGN_DOCUMENT_v0_1.md` and `DEVELOPMENT_CHANGELOG.md`. The GDD remains the design source of truth; this handoff describes the current implementation.
 
-## Current project state
+## Current project baseline
 
 - Godot 4.7.2 Stable, GDScript, GL Compatibility renderer, Windows.
 - Main scene: `res://scenes/test_range.tscn`.
-- One ship `RigidBody3D` owns all physical motion. Do not split vanes into separate rigid bodies.
-- Single-player walkaround/cockpit entry is implemented. Ship flight is a simplified Newtonian model with repulsorlift translation and vane force couples, FCC assistance, atmosphere drag/wind and shield glide lift.
-- Phase 2N FCC changes keep maneuver controls available whenever the field is online, even at zero main-vector throttle; zero throttle gives a limited 20% maneuver boost, with bounded partial healthy-vane redistribution.
-- Phase 2O introduced a ship-owned `FlightSensorSuite`. The HUD should consume sensor packets and validity flags rather than read physics state itself.
-- Phase 2P ship sizing: 30,000 kg dry mass, 25,000 kg design payload, 55,000 kg maximum gross mass. Fixed bottom lift force is about 593.5 kN (1.10 gross TWR); rear forward force about 809.3 kN (1.50 gross TWR). Cargo is not implemented.
-- Vane thermal behavior is described in the GDD but **not implemented**.
+- One `RigidBody3D` owns all ship motion, mass, inertia and collisions. Do not split vanes into independent rigid bodies.
+- Flight uses simplified Newtonian translation, fixed-rated repulsorlift authority, vane-generated maneuver forces, FCC assistance, atmosphere drag/wind and shield-generated glide lift.
+- Ship dry mass: 30,000 kg. Design payload: 25,000 kg. Maximum gross design mass: 55,000 kg.
+- Vane authority is rated at design gross mass, so cargo adds inertia without increasing engine rating.
+- `FlightSensorSuite` is the instrument-data boundary; HUD rendering consumes the instrument packet and validity flags.
+- Current HUD is the screen-space `CanvasLayer` implementation. Side instruments remain visible in cockpit/external views; central symbology is gated by cockpit view and camera alignment. The earlier physical windshield/SubViewport experiment is not the active scene architecture.
 
-## Current HUD architecture and known issue
+## Flight control and force allocation
 
-- Side gauges and control-input viewer are screen-space and should remain visible in both cockpit and third-person views (except while F3 diagnostics are open).
-- Central ladder, boresight, flight-path marker and compass are projected onto a physical 3D windshield surface fixed to the ship. Camera head-look must move the camera relative to this surface, not move the HUD with the camera.
-- The previous SubViewport implementation was missing in runtime despite node-existence checks passing. Phase 2Q moves the transparent 2D SubViewport to the ship root, sets `UPDATE_ALWAYS`, and configures the receiving material for premultiplied-alpha, no depth test, no depth writes and late transparent render priority.
-- The central HUD is **not yet considered verified** until `tests/flight_hud_layout_test.gd` (run with the desktop renderer, not `--headless`) confirms non-transparent pixels from the SubViewport and the user confirms it displays in-game.
+- `RepulsorliftSystem` owns force and torque calculations and submits them from the physics-tick path.
+- `VaneController` stores per-instance vane health, alignment and thermal state. Vane resources remain immutable configuration.
+- FCC assisted mode uses a bounded PI angular-rate controller with anti-windup. It is **not** attitude hold; it does not command a return to level.
+- Integral trim clears when the field/control authority is unavailable or assistance is disabled.
+- Existing P response, output cap, direct-vane mode, input shaping and limited healthy-vane redistribution remain.
+- Main-field resultant is applied at the fixed hull reference datum. An offset cargo COM produces a real lever-arm moment. Gravity is not itself treated as a torque source merely because the COM is shifted.
+- FCC can counter only moments within its available vane authority. Saturation and residual rotation are legitimate outcomes.
 
-## Development constraints
+## Thermal model
 
-- Preserve `scenes/test_range.tscn` as regression environment; new spaceport/planet and orbital test scenes should be separate.
-- Do not alter the atmospheric drag/wind/glide-lift coefficients without an explicit request and a separate test pass.
-- Build thermal behavior as a distinct subsystem later: current temperature changes available vane output; hot operation accelerates wear and fault risk; cooling recovers thermal margin. Keep temperature, wear and health separate.
-- Keep code stable and defensive. Use physics tick for physical forces; do not set the rigid body's transform to simulate flight.
-- Deliver overwrite ZIPs containing only modified files, preserving relative project paths; do not substitute patcher installers unless explicitly requested.
+- Vane temperature, load, wear, integrity, failure and sputtering are per-vane state.
+- Main-vector demand is allocated to the appropriate vane groups; maneuver contributions add per-vane load from the force allocator.
+- Thermal updates advance every repulsorlift physics call, including field-off/frozen calls. Offline vanes cool toward ambient and do not accrue operating wear.
+- Thermal coefficients are game-tuned; do not silently change them or claim real-world equivalence.
+- Load-dependent green-zone bounds: `60 * load^0.7` through `180 - 20 * load` °C.
+- Full load heats quickly with the present coefficients; the earlier 25–35 second overheat statement is not current behavior.
 
-## Immediate next work
+## Cargo model
 
-1. Verify Phase 2Q HUD render output and manual cockpit/third-person behavior.
-2. Run the full regression test suite with the project's Godot 4.7.2 executable.
-3. Only then proceed to environment profile architecture, a separate local spaceport scene, orbital-space scene and basic shaders.
+- `CargoSystem` derives dry mass and maximum payload from its parent `ShipInteractable`; do not add competing mass-rating exports.
+- It updates the actual `RigidBody3D` mass and custom COM.
+- The F4 manifest is an abstract mass/position model, not yet physical packages, storage volume, loading animations, inventory or contract cargo.
+- Hover throttle display is a nominal 1g estimate only. It excludes thermal derating, damage, local gravity and current allocator limits.
+
+## Testing and workflow
+
+Keep `scenes/test_range.tscn` as the regression environment. New planets, local spaceports and orbital scenes should be separate.
+
+Run the thermal, cargo integration, FCC trim, FCC, force-allocation, sensor, FPM, HUD-layout and display-settings tests after relevant changes. Use Godot 4.7.2, not a different major version. Do not claim tests passed unless they were actually run.
+
+Preserve the user's preferred delivery format: ordinary overwrite ZIP, only changed files, original project-relative paths, no patcher. Make no unrelated flight-model tuning changes during polish passes.
