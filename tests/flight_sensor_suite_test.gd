@@ -61,10 +61,24 @@ func _run_tests() -> void:
 	root.add_child(body)
 	var sensor = SENSOR_SCRIPT.new()
 	body.add_child(sensor)
-	await process_frame
+	await physics_frame
+	body.linear_velocity = Vector3(0.0, 0.0, -12.0)
+	await physics_frame
 	var packet: Dictionary = sensor.get_instrument_snapshot()
 	_expect(packet.has("instrument_attitude_basis_world"), "Sensor suite publishes an instrument packet")
 	_expect(bool(packet.get("instrument_heading_valid", false)), "Heading channel starts nominal")
+	_expect_near_vector(
+		packet.get("instrument_inertial_velocity_world", Vector3.ZERO),
+		body.linear_velocity,
+		EPSILON,
+		"Sensor packet exposes inertial velocity for the flight-path marker"
+	)
+	_expect_near_vector(
+		packet.get("instrument_air_relative_velocity_world", Vector3.ZERO),
+		body.linear_velocity,
+		EPSILON,
+		"In vacuum, the indicated velocity channel matches inertial velocity"
+	)
 	sensor.set_channel_available(&"heading", false)
 	packet = sensor.get_instrument_snapshot()
 	_expect(not bool(packet.get("instrument_heading_valid", true)), "Heading channel can be independently marked failed")
@@ -81,6 +95,10 @@ func _expect(condition: bool, description: String) -> void:
 		print("PASS: %s" % description)
 	else:
 		_fail(description)
+
+
+func _expect_near_vector(actual: Vector3, expected: Vector3, tolerance: float, description: String) -> void:
+	_expect(actual.distance_to(expected) <= tolerance, "%s (actual %s, expected %s)" % [description, str(actual), str(expected)])
 
 
 func _expect_near(actual: float, expected: float, tolerance: float, description: String) -> void:

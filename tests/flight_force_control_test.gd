@@ -49,7 +49,13 @@ func _run_tests() -> void:
 		quit(1)
 		return
 
+	var telemetry: Dictionary = {}
+	var main_force: Vector3 = Vector3.ZERO
+
 	_expect(vane_controller.is_configuration_valid(), "Vane configuration is valid")
+	_expect_near(ship.mass, 30000.0, EPSILON, "Prototype freighter starts at 30 tonnes dry mass")
+	_expect_near(ship.max_payload_mass_kg, 25000.0, EPSILON, "Prototype freighter payload rating is 25 tonnes")
+	_expect_near(ship.get_design_gross_mass_kg(), 55000.0, EPSILON, "Design gross mass is 55 tonnes")
 	_expect_equal(vane_controller.get_vane_count(), 7, "Four bottom, one rear/main and two side vanes are registered")
 	_expect_near(
 		vane_controller.get_group_nominal_authority_twr(&"bottom_front")
@@ -59,11 +65,31 @@ func _run_tests() -> void:
 		"Bottom vane array preserves 1.1 nominal TWR"
 	)
 
+	# Vane TWR values are fixed force ratings at 55 t design gross mass.
+	# At maximum payload the lift array has only 0.10 g of excess acceleration.
+	var expected_max_lift_force: float = 55000.0 * 9.81 * 1.1
+	system.apply_flight_control_forces(true, 1.0, 90.0, 0.0, 0.0, 0.0)
+	telemetry = system.get_telemetry()
+	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
+	_expect_near(main_force.y, expected_max_lift_force, 0.1, "Maximum lift force is rated at 55-tonne gross mass")
+	_expect_near(float(telemetry.get("lift_maximum_twr", 0.0)), expected_max_lift_force / (30000.0 * ship.get_gravity().length()), 0.001, "Empty 30-tonne ship has more physical lift TWR than its loaded limit")
+	ship.mass = 55000.0
+	system.apply_flight_control_forces(true, 1.0, 90.0, 0.0, 0.0, 0.0)
+	telemetry = system.get_telemetry()
+	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
+	_expect_near(main_force.y, expected_max_lift_force, 0.1, "Adding cargo does not increase rated maximum lift force")
+	var local_gravity_mps2: float = ship.get_gravity().length()
+	var actual_loaded_twr: float = expected_max_lift_force / (55000.0 * maxf(local_gravity_mps2, 0.001))
+	var expected_loaded_hover_percent: float = 100.0 / actual_loaded_twr
+	_expect_near(float(telemetry.get("lift_actual_twr", 0.0)), actual_loaded_twr, 0.001, "Fully loaded lift authority is approximately 1.10 physical TWR")
+	_expect_near(float(telemetry.get("lift_hover_power_percent", 0.0)), expected_loaded_hover_percent, 0.02, "Fully loaded ship needs about 91% main-vector output merely to hover")
+	ship.mass = 30000.0
+
 	# Neutral hover must produce a central upward force and no control torque.
 	vane_controller.reset_all_vanes()
 	system.apply_flight_control_forces(true, 1.0, 90.0, 0.0, 0.0, 0.0)
-	var telemetry: Dictionary = system.get_telemetry()
-	var main_force: Vector3 = telemetry.get("lift_main_force_vector", Vector3.ZERO)
+	telemetry = system.get_telemetry()
+	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
 	var neutral_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
 	_expect(main_force.y > 0.0 and absf(main_force.z) <= EPSILON, "90-degree main vector is pure ship-local vertical lift")
 	_expect_near(neutral_torque.length(), 0.0, EPSILON, "Neutral healthy field has no unwanted baseline torque")
@@ -124,6 +150,7 @@ func _run_tests() -> void:
 	telemetry = system.get_telemetry()
 	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
 	_expect(main_force.z < 0.0 and absf(main_force.y) <= EPSILON, "0-degree vector produces forward translation")
+	_expect_near(main_force.length(), 55000.0 * 9.81 * 1.5, 0.1, "Main propulsion is rated at 1.50 gross TWR")
 	system.apply_flight_control_forces(true, 1.0, 110.0, 0.0, 0.0, 0.0)
 	telemetry = system.get_telemetry()
 	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)

@@ -3,6 +3,12 @@ class_name ShipInteractable
 ## Physics-enabled placeholder freighter. The single rigid-body root is retained
 ## for all flight forces, moments, collision response, and future cargo changes.
 
+@export_category("Mass and cargo rating")
+## Maximum abstract cargo payload. This is a design limit, not current cargo.
+@export_range(0.0, 100000.0, 250.0) var max_payload_mass_kg: float = 25000.0
+
+var _design_dry_mass_kg: float = 0.0
+
 @onready var pilot_zone: Area3D = $PilotZone
 @onready var seat_anchor: Marker3D = $CockpitSeat
 @onready var cockpit_camera: Camera3D = $CockpitSeat/CockpitCamera
@@ -11,6 +17,20 @@ class_name ShipInteractable
 
 var _pilot_claimed: bool = false
 var _active_pilot: Node = null
+
+
+func _enter_tree() -> void:
+	# Capture scene-authored dry mass before a future cargo manifest changes
+	# RigidBody3D.mass. Propulsion ratings stay fixed at the design gross mass.
+	_design_dry_mass_kg = mass
+
+
+func get_design_dry_mass_kg() -> float:
+	return _design_dry_mass_kg if _design_dry_mass_kg > 0.0 else mass
+
+
+func get_design_gross_mass_kg() -> float:
+	return get_design_dry_mass_kg() + maxf(max_payload_mass_kg, 0.0)
 
 
 func _ready() -> void:

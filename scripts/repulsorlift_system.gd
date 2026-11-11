@@ -7,9 +7,9 @@ class_name RepulsorliftSystem
 ## Godot's RigidBody3D solver to produce the corresponding rotation naturally.
 
 @export_category("Main field vector")
-## TWR is converted to force using this reference acceleration. The ship keeps
-## propulsion authority in low/zero gravity; gravity is used only for telemetry
-## and the local hover-threshold calculation.
+## TWR values in vane resources are rated against maximum design gross mass
+## (dry mass + payload capacity), not current loaded mass. This keeps maximum
+## thrust fixed as cargo is added, so heavier loads accelerate less.
 @export_range(1.0, 20.0, 0.1) var reference_gravity_mps2: float = 9.81
 
 @export_category("Maneuver authority")
@@ -82,7 +82,7 @@ func _ready() -> void:
 	if _force_debug == null:
 		push_warning("ForceVectorDebug node is missing; F3 force arrows will be unavailable.")
 
-	_last_maximum_lift_twr = _get_bottom_nominal_authority_twr()
+	_last_maximum_lift_twr = _get_maximum_lift_twr_at_current_mass()
 	if not _vane_controller.is_configuration_valid():
 		push_error("Vane configuration is invalid: %s" % "; ".join(_vane_controller.get_configuration_errors()))
 
@@ -123,7 +123,7 @@ func apply_flight_control_forces(
 	var body_basis: Basis = _ship.global_basis.orthonormalized()
 	var center_of_mass_world: Vector3 = _ship.global_transform * _ship.center_of_mass
 	_last_gravity_magnitude = _ship.get_gravity().length()
-	var reference_force_newtons_per_twr: float = _ship.mass * reference_gravity_mps2
+	var reference_force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
 	var main_vector_force_scale: float = reference_force_newtons_per_twr * _last_power_output
 	# Maneuvering remains available whenever the field is ONLINE. Reducing the
 	# main-vector allocation releases a small amount of capacity to the vanes.
@@ -169,7 +169,7 @@ func _reset_frame_output(
 	_last_vertical_twr = 0.0
 	_last_force_vectors.clear()
 	_last_vane_contributions.clear()
-	_last_maximum_lift_twr = _get_bottom_nominal_authority_twr()
+	_last_maximum_lift_twr = _get_maximum_lift_twr_at_current_mass()
 
 
 func _apply_main_vector(body_basis: Basis, center_of_mass_world: Vector3, force_newtons_per_twr: float) -> void:
@@ -351,6 +351,26 @@ func _get_bottom_effective_authority_twr() -> float:
 	)
 
 
+func _get_rated_gross_mass_kg() -> float:
+	if not is_instance_valid(_ship):
+		return 0.0
+	return maxf(_ship.get_design_gross_mass_kg(), MINIMUM_MASS_KG)
+
+
+func _get_maximum_lift_twr_at_current_mass() -> float:
+	if not is_instance_valid(_ship) or _ship.mass <= MINIMUM_MASS_KG:
+		return 0.0
+	var local_gravity_mps2: float = _ship.get_gravity().length()
+	if local_gravity_mps2 <= 0.0001:
+		return 0.0
+	var rated_lift_force: float = (
+		_get_bottom_nominal_authority_twr()
+		* _get_rated_gross_mass_kg()
+		* reference_gravity_mps2
+	)
+	return rated_lift_force / (_ship.mass * local_gravity_mps2)
+
+
 func set_debug_visualization_enabled(enabled: bool) -> void:
 	_debug_visualization_enabled = enabled
 	if is_instance_valid(_force_debug):
@@ -366,7 +386,7 @@ func _update_force_debug(force_refresh: bool = false) -> void:
 	if not force_refresh and _debug_refresh_counter < DEBUG_REFRESH_EVERY_CALLS:
 		return
 	_debug_refresh_counter = 0
-	var reference_force: float = _ship.mass * reference_gravity_mps2
+	var reference_force: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
 	_force_debug.update_force_vectors(_last_force_vectors, _ship.global_transform, reference_force)
 
 
@@ -375,8 +395,14 @@ func get_telemetry() -> Dictionary:
 	var local_gravity_magnitude: float = _ship.get_gravity().length() if is_instance_valid(_ship) else 0.0
 	var bottom_effective_twr: float = _get_bottom_effective_authority_twr()
 	var hover_power_percent: float = -1.0
-	if bottom_effective_twr > 0.0001 and local_gravity_magnitude > 0.0001:
-		hover_power_percent = 100.0 * local_gravity_magnitude / (reference_gravity_mps2 * bottom_effective_twr)
+	var rated_gross_mass_kg: float = _get_rated_gross_mass_kg()
+	var current_mass_kg: float = _ship.mass if is_instance_valid(_ship) else 0.0
+	if (bottom_effective_twr > 0.0001 and local_gravity_magnitude > 0.0001
+			and rated_gross_mass_kg > MINIMUM_MASS_KG and current_mass_kg > MINIMUM_MASS_KG):
+		hover_power_percent = (
+			100.0 * current_mass_kg * local_gravity_magnitude
+			/ (rated_gross_mass_kg * reference_gravity_mps2 * bottom_effective_twr)
+		)
 
 	var vane_telemetry: Dictionary = {}
 	if is_instance_valid(_vane_controller):
@@ -393,6 +419,11 @@ func get_telemetry() -> Dictionary:
 		"lift_maximum_twr": _last_maximum_lift_twr,
 		"lift_hover_power_percent": hover_power_percent,
 		"lift_gravity_magnitude": local_gravity_magnitude,
+		"lift_rated_gross_mass_kg": rated_gross_mass_kg,
+		"lift_design_dry_mass_kg": _ship.get_design_dry_mass_kg() if is_instance_valid(_ship) else 0.0,
+		"lift_payload_capacity_kg": _ship.max_payload_mass_kg if is_instance_valid(_ship) else 0.0,
+		"lift_current_mass_kg": current_mass_kg,
+		"lift_maximum_vertical_force_n": rated_gross_mass_kg * reference_gravity_mps2 * bottom_effective_twr,
 		"lift_torque_vector": _last_total_torque,
 		"lift_torque_magnitude": _last_total_torque.length(),
 		"lift_torque_applied": _last_total_torque.length_squared() > MINIMUM_TORQUE_SQUARED,

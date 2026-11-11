@@ -604,6 +604,14 @@ A badly distributed or extreme cargo load may be hoverable after the FCC trims t
 
 **DESIGN DIRECTION —** Most normal cargo should be abstract, but some ships or unusual cargo situations may permit off-center loading and meaningful center-of-mass effects. Exact cargo-slot layout and loading constraints are **TBD**.
 
+## 12.3 Prototype freighter mass rating
+
+**CONFIRMED —** The current prototype freighter has a dry mass of **30,000 kg (30 tonnes)** and a maximum payload capacity of **25,000 kg (25 tonnes)**. Its maximum design gross mass is therefore **55,000 kg (55 tonnes)**. Cargo is not yet implemented; the payload figure is a design/performance rating for the future cargo manifest.
+
+The repulsorlift and vane authority values are rated against the **55-tonne design gross mass**, producing fixed maximum force. Current ship mass determines acceleration and lift margin. This is intentional: adding cargo must not automatically increase the ship's rated thrust.
+
+At the current nominal bottom-vane authority of **1.10 gross TWR**, maximum vertical force is approximately **593.5 kN**. At the 55-tonne gross limit this provides 0.10 g net upward acceleration at full output, making a fully loaded takeoff deliberately sluggish but possible. At 30 tonnes dry mass, the same fixed lift force provides substantially more margin. The main rear vane remains rated at **1.50 gross TWR** for forward propulsion.
+
 
 # 13. Vane temperature, degradation and damage
 

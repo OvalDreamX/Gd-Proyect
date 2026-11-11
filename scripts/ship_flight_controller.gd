@@ -33,13 +33,14 @@ const MIN_VECTOR_DISTRIBUTION_DEGREES: float = 0.0
 const MAX_VECTOR_DISTRIBUTION_DEGREES: float = 110.0
 const DEFAULT_VECTOR_DISTRIBUTION_DEGREES: float = 90.0
 const TELEMETRY_UPDATE_INTERVAL_SECONDS: float = 1.0 / 30.0
+const COCKPIT_RECENTER_DELAY_SECONDS: float = 3.0
 
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 @onready var _camera_controller: ShipCameraController = get_node("../CameraController") as ShipCameraController
 @onready var _repulsorlift_system: RepulsorliftSystem = get_node("../RepulsorliftSystem") as RepulsorliftSystem
 @onready var _fcc: FlightControlComputer = get_node("../FlightControlComputer") as FlightControlComputer
 @onready var _atmospheric_flight_model: AtmosphericFlightModel = get_node_or_null("../AtmosphericFlightModel") as AtmosphericFlightModel
-@onready var _flight_sensor_suite: Node = get_node_or_null("../FlightSensorSuite")
+@onready var _flight_sensor_suite: FlightSensorSuite = get_node_or_null("../FlightSensorSuite") as FlightSensorSuite
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -56,6 +57,7 @@ var _roll_command: float = 0.0
 var _pitch_command: float = 0.0
 var _require_neutral_controls: bool = false
 var _camera_look_mode: bool = false
+var _cockpit_recenter_time_remaining: float = -1.0
 var _debug_interaction_mode: bool = false
 var _debug_overview_enabled: bool = false
 var _pilot_was_ready: bool = false
@@ -76,10 +78,11 @@ func _ready() -> void:
 		or _camera_controller == null
 		or _repulsorlift_system == null
 		or _fcc == null
+		or _flight_sensor_suite == null
 	):
 		push_error(
 			"ShipFlightController requires ShipInteractable, CameraController, "
-			+ "RepulsorliftSystem, and FlightControlComputer."
+			+ "RepulsorliftSystem, FlightControlComputer, and FlightSensorSuite."
 		)
 		set_process(false)
 		set_process_unhandled_input(false)
@@ -90,7 +93,6 @@ func _ready() -> void:
 	_hud.name = "FlightHUD"
 	add_child(_hud)
 	_hud.visible = false
-	_hud.set_cockpit_active(false)
 	_repulsorlift_system.set_debug_visualization_enabled(_debug_overview_enabled)
 	_update_fcc_snapshot(false)
 	_publish_telemetry()
@@ -117,6 +119,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("ship_camera_toggle") and not _debug_interaction_mode:
 		_camera_controller.toggle_view()
+		_cockpit_recenter_time_remaining = -1.0
 		_publish_telemetry()
 		get_viewport().set_input_as_handled()
 		return
@@ -138,6 +141,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			_camera_look_mode = not _camera_look_mode
+			if _camera_look_mode:
+				# Entering look mode cancels any pending automatic recenter.
+				_cockpit_recenter_time_remaining = -1.0
+			elif not _camera_controller.is_external_view():
+				# Returning to flight control starts the three-second grace period.
+				_cockpit_recenter_time_remaining = COCKPIT_RECENTER_DELAY_SECONDS
 			if _debug_interaction_mode:
 				_require_neutral_controls = true
 				_debug_interaction_mode = false
@@ -214,11 +223,11 @@ func _physics_process(delta: float) -> void:
 	var pilot_ready: bool = _ship.is_pilot_ready()
 	if _hud.visible != pilot_ready:
 		_hud.visible = pilot_ready
-		_hud.set_cockpit_active(pilot_ready)
 
 	if pilot_ready and not _pilot_was_ready:
 		_pilot_was_ready = true
 		_camera_look_mode = false
+		_cockpit_recenter_time_remaining = -1.0
 		_debug_interaction_mode = false
 		_camera_controller.activate_cockpit_view()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -226,12 +235,22 @@ func _physics_process(delta: float) -> void:
 	elif not pilot_ready and _pilot_was_ready:
 		_pilot_was_ready = false
 		_camera_look_mode = false
+		_cockpit_recenter_time_remaining = -1.0
 		_debug_interaction_mode = false
 		_roll_command = 0.0
 		_pitch_command = 0.0
 		_camera_controller.reset_camera_state()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_publish_telemetry()
+
+	if pilot_ready and not _camera_look_mode and not _camera_controller.is_external_view() and _cockpit_recenter_time_remaining >= 0.0:
+		if _cockpit_recenter_time_remaining > 0.0:
+			_cockpit_recenter_time_remaining = maxf(_cockpit_recenter_time_remaining - delta, 0.0)
+		elif _camera_controller.recenter_cockpit_camera(delta):
+			_publish_telemetry()
+		else:
+			_cockpit_recenter_time_remaining = -1.0
+			_publish_telemetry()
 
 	if not pilot_ready:
 		if _hud.is_display_settings_open():
@@ -433,6 +452,8 @@ func _publish_telemetry() -> void:
 		"input_mode": _input_mode_name(),
 		"camera_yaw_degrees": camera_angles.x,
 		"camera_pitch_degrees": camera_angles.y,
+		"cockpit_camera_centered": _camera_controller.is_cockpit_camera_centered(),
+		"cockpit_camera_fov_degrees": _camera_controller.get_cockpit_fov_degrees(),
 		"debug_overview_enabled": _debug_overview_enabled,
 		"debug_interaction_mode": _debug_interaction_mode,
 		"ship_mass_kg": _ship.mass,

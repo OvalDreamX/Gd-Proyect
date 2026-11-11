@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Space Trucker - Phase 2N Flight/HUD Corrections"
-config/description="Newtonian repulsorlift flight prototype with world-aligned HUD and bounded FCC maneuver allocation."
+config/name="Space Trucker - Phase 2Q Stable HUD and Camera Recenter"
+config/description="Stable screen-space flight HUD with cockpit boresight gating and automatic camera recentering."
 run/main_scene="res://scenes/test_range.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 

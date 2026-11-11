@@ -13,7 +13,7 @@ const TEST_VANE_RESOURCES: Array[String] = [
 	"res://data/vanes/main_rear.tres",
 ]
 
-const TEST_MASS_KG: float = 12000.0
+const TEST_RATED_GROSS_MASS_KG: float = 55000.0
 const TEST_GRAVITY: float = 9.81
 const EPSILON: float = 0.01
 
@@ -50,12 +50,12 @@ func _run_tests() -> void:
 	)
 	_expect_near(controller.get_group_nominal_authority_twr(&"main_rear"), 1.5, 0.0001, "Main rear vane retains its 1.5 TWR placeholder")
 
-	var force_scale: float = TEST_MASS_KG * TEST_GRAVITY
+	var force_scale: float = TEST_RATED_GROSS_MASS_KG * TEST_GRAVITY
 	var front: Dictionary = _calculate(controller, &"bottom_front", Vector3.UP, force_scale)
 	var rear: Dictionary = _calculate(controller, &"bottom_rear", Vector3.UP, force_scale)
 	var healthy_force: Vector3 = front["net_force"] + rear["net_force"]
 	var healthy_torque: Vector3 = front["net_torque"] + rear["net_torque"]
-	_expect_near(healthy_force.y, TEST_MASS_KG * TEST_GRAVITY * 1.1, 0.1, "Healthy vanes produce expected 1.1-TWR collective force")
+	_expect_near(healthy_force.y, TEST_RATED_GROSS_MASS_KG * TEST_GRAVITY * 1.1, 0.1, "Healthy vanes produce expected 1.1 gross-TWR collective force")
 	_expect_near(healthy_torque.length(), 0.0, EPSILON, "Symmetric healthy vanes produce no unintended torque")
 
 	controller.set_vane_integrity(&"bottom_front_right", 0.5)

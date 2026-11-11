@@ -21,3 +21,18 @@
 6. Pressing F starts the dimmed camera-dolly transition.
 7. Transition ends in the cockpit view with the player body moved to the seat and walking disabled.
 8. No error appears in the Debugger / Output panel.
+
+
+# Phase 2Q — HUD projection verification
+
+## Source-level checks
+
+- Windshield SubViewport is a ship child, not a child of the hidden `FlightHUD` CanvasLayer.
+- Viewport is 1280×720, transparent, 2D-only and `UPDATE_ALWAYS`.
+- Receiving material uses premultiplied-alpha blending, no depth test, disabled depth writes/culling, and render priority 127.
+- Regression test now samples the SubViewport image and checks for non-transparent HUD pixels; node existence/visibility alone is no longer treated as proof of rendering. Run this one with the desktop renderer, not `--headless`.
+- Third-person side HUD behavior and compass wraparound are covered by tests.
+
+## Runtime status
+
+**Not runtime-validated in this build environment.** The Windows Godot executable is included in the project, but this Linux build environment cannot execute the Windows binary. The user must run the Phase 2Q tests and inspect the cockpit projection in Godot 4.7.2. Do not assume the central HUD is fixed until the pixel-output test passes.

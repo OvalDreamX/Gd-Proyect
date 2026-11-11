@@ -1,36 +1,35 @@
-# AI Handoff — Space Trucker Phase 1
+# AI Handoff — Space Trucker (Current Flight Prototype)
 
-Use this file together with the project's master Game Design Document.
+Read this file together with `GAME_DESIGN_DOCUMENT_v0_1.md` and `DEVELOPMENT_CHANGELOG.md`. The GDD is the design source of truth; the changelog records recent implementation milestones.
 
-## Current verified intent
+## Current project state
 
-The user requested only the first interaction slice:
+- Godot 4.7.2 Stable, GDScript, GL Compatibility renderer, Windows.
+- Main scene: `res://scenes/test_range.tscn`.
+- One ship `RigidBody3D` owns all physical motion. Do not split vanes into separate rigid bodies.
+- Single-player walkaround/cockpit entry is implemented. Ship flight is a simplified Newtonian model with repulsorlift translation and vane force couples, FCC assistance, atmosphere drag/wind and shield glide lift.
+- Phase 2N FCC changes keep maneuver controls available whenever the field is online, even at zero main-vector throttle; zero throttle gives a limited 20% maneuver boost, with bounded partial healthy-vane redistribution.
+- Phase 2O introduced a ship-owned `FlightSensorSuite`. The HUD should consume sensor packets and validity flags rather than read physics state itself.
+- Phase 2P ship sizing: 30,000 kg dry mass, 25,000 kg design payload, 55,000 kg maximum gross mass. Fixed bottom lift force is about 593.5 kN (1.10 gross TWR); rear forward force about 809.3 kN (1.50 gross TWR). Cargo is not implemented.
+- Vane thermal behavior is described in the GDD but **not implemented**.
 
-1. Start in a first-person walking mode next to a placeholder cube-like spaceship.
-2. Walk close enough to the ship.
-3. Show a prompt to pilot it.
-4. Press F.
-5. Play a short tweened transition and move the player to the cockpit.
-6. Switch to a cockpit camera.
+## Current HUD architecture and known issue
 
-Do not implement flight controls, repulsorlift behavior, reactor startup, cargo, or other systems yet.
+- Side gauges and control-input viewer are screen-space and should remain visible in both cockpit and third-person views (except while F3 diagnostics are open).
+- Central ladder, boresight, flight-path marker and compass are projected onto a physical 3D windshield surface fixed to the ship. Camera head-look must move the camera relative to this surface, not move the HUD with the camera.
+- The previous SubViewport implementation was missing in runtime despite node-existence checks passing. Phase 2Q moves the transparent 2D SubViewport to the ship root, sets `UPDATE_ALWAYS`, and configures the receiving material for premultiplied-alpha, no depth test, no depth writes and late transparent render priority.
+- The central HUD is **not yet considered verified** until `tests/flight_hud_layout_test.gd` (run with the desktop renderer, not `--headless`) confirms non-transparent pixels from the SubViewport and the user confirms it displays in-game.
 
-## Architecture in this slice
+## Development constraints
 
-- Godot 4.7.2 stable, GDScript, GL Compatibility renderer.
-- `PlayerController` is a `CharacterBody3D`.
-- Ship root is a frozen `RigidBody3D`, retained for future flight physics.
-- Ship `Area3D` reports proximity to the player.
-- `PlayerController` owns its prompt UI and transition fade.
-- The ship supplies a seat marker, cockpit camera, hull visual and cockpit-interior placeholder.
-- During entry, the view dims, the placeholder hull is hidden, cockpit-interior geometry is revealed, and the first-person camera dollies to the cockpit camera position. A brief final fade masks teleporting the player body to the seat marker and switching the active camera. Player collision and physics processing are then disabled.
+- Preserve `scenes/test_range.tscn` as regression environment; new spaceport/planet and orbital test scenes should be separate.
+- Do not alter the atmospheric drag/wind/glide-lift coefficients without an explicit request and a separate test pass.
+- Build thermal behavior as a distinct subsystem later: current temperature changes available vane output; hot operation accelerates wear and fault risk; cooling recovers thermal margin. Keep temperature, wear and health separate.
+- Keep code stable and defensive. Use physics tick for physical forces; do not set the rigid body's transform to simulate flight.
+- Deliver overwrite ZIPs containing only modified files, preserving relative project paths; do not substitute patcher installers unless explicitly requested.
 
-## Important current limitations
+## Immediate next work
 
-- No way to exit the cockpit yet. Restart the scene to repeat the interaction.
-- The placeholder hull is hidden while in cockpit because it is a solid box.
-- No ship control or physics simulation is implemented.
-
-## Development discipline
-
-Keep changes incremental. Test the current project before adding another subsystem. Preserve the separation between player locomotion, ship interaction and future ship flight physics. Do not replace the `RigidBody3D` ship root without a strong reason.
+1. Verify Phase 2Q HUD render output and manual cockpit/third-person behavior.
+2. Run the full regression test suite with the project's Godot 4.7.2 executable.
+3. Only then proceed to environment profile architecture, a separate local spaceport scene, orbital-space scene and basic shaders.

@@ -12,13 +12,6 @@ const COLOR_MUTED: Color = Color(0.47, 0.64, 0.70, 1.0)
 const COLOR_ACCENT: Color = Color(0.30, 0.83, 0.90, 1.0)
 
 var _flight_display: Control
-var _windshield_viewport: SubViewport
-var _windshield_display: Control
-var _windshield_projection_root: Node3D
-var _windshield_surface: MeshInstance3D
-var _cockpit_active: bool = false
-var _camera_in_cockpit: bool = true
-var _telemetry_cache_debug_enabled: bool = false
 var _debug_panel: PanelContainer
 var _debug_text_label: TextEdit
 var _settings_overlay: Control
@@ -34,10 +27,8 @@ var _previous_mouse_mode: int = Input.MOUSE_MODE_VISIBLE
 func _ready() -> void:
 	layer = 20
 	_build_hud()
-	_build_windshield_projection()
 	_build_display_settings_overlay()
 	visible = false
-	set_cockpit_active(false)
 
 
 func update_telemetry(telemetry: Dictionary) -> void:
@@ -45,16 +36,13 @@ func update_telemetry(telemetry: Dictionary) -> void:
 		return
 
 	_flight_display.call("update_telemetry", telemetry)
-	if is_instance_valid(_windshield_display):
-		_windshield_display.call("update_telemetry", telemetry)
 
 	var debug_enabled: bool = bool(telemetry.get("debug_overview_enabled", false))
-	_telemetry_cache_debug_enabled = debug_enabled
-	var camera_view: String = str(telemetry.get("camera_view", "COCKPIT"))
-	_camera_in_cockpit = camera_view == "COCKPIT"
-	_flight_display.visible = _camera_in_cockpit and not debug_enabled
+	# Keep the side instruments and control viewer available in cockpit and
+	# external views. The overlay itself suppresses only central flight symbology
+	# when the cockpit camera is not aligned with the ship boresight.
+	_flight_display.visible = not debug_enabled
 	_debug_panel.visible = debug_enabled
-	_update_windshield_visibility(debug_enabled)
 
 	if debug_enabled:
 		_update_debug_text(telemetry)
@@ -64,7 +52,6 @@ func _build_hud() -> void:
 	_flight_display = Control.new()
 	_flight_display.name = "CockpitFlightDisplay"
 	_flight_display.set_script(HUD_OVERLAY_SCRIPT)
-	_flight_display.set("render_mode", &"SIDES")
 	_flight_display.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_flight_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_flight_display)
@@ -148,10 +135,12 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	var local_vertical_speed: float = velocity.dot(local_up_world)
 	var local_altitude: float = float(telemetry.get("atmosphere_altitude_m", position.y))
 	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
-	var pitch_attitude: float = float(telemetry.get("instrument_pitch_degrees", 0.0))
-	var roll_attitude: float = float(telemetry.get("instrument_bank_degrees", 0.0))
-	var heading: float = float(telemetry.get("instrument_heading_degrees", 0.0))
-	var sensor_status: Dictionary = telemetry.get("instrument_channel_status", {})
+	var basis: Basis = telemetry.get("ship_global_basis", Basis.IDENTITY)
+	basis = basis.orthonormalized()
+	var pitch_attitude: float = rad_to_deg(asin(clampf(-basis.z.y, -1.0, 1.0)))
+	var roll_attitude: float = rad_to_deg(atan2(basis.x.y, basis.y.y))
+	var forward: Vector3 = -basis.z.normalized()
+	var heading: float = fposmod(rad_to_deg(atan2(-forward.x, -forward.z)), 360.0)
 	var gravity: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
 	var net_force: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO)
 	var net_force_newtons: float = float(telemetry.get("lift_force_newtons", 0.0))
@@ -221,9 +210,6 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Velocity: (%.3f, %.3f, %.3f) m/s | Ground speed: %.3f m/s | Local vertical speed: %+.3f m/s" % [velocity.x, velocity.y, velocity.z, velocity.length(), local_vertical_speed])
 	lines.append("Attitude: pitch %+.2f° | roll %+.2f° | heading %03.0f°" % [pitch_attitude, roll_attitude, heading])
 	lines.append("Angular velocity world: (%.4f, %.4f, %.4f) rad/s | Magnitude: %.4f rad/s" % [angular_velocity.x, angular_velocity.y, angular_velocity.z, angular_velocity.length()])
-	lines.append("[ FLIGHT SENSOR BUS ]")
-	lines.append("AHRS attitude: %s | Compass heading: %s | Velocity: %s | Altimeter: %s" % [str(sensor_status.get("ATTITUDE", "N/A")), str(sensor_status.get("HEADING", "N/A")), str(sensor_status.get("VELOCITY", "N/A")), str(sensor_status.get("ALTITUDE", "N/A"))])
-	lines.append("Heading reference north: %s | Local up: %s" % [str(telemetry.get("instrument_north_world", Vector3.ZERO)), str(telemetry.get("instrument_local_up_world", local_up_world))])
 	lines.append("Rigid body frozen: %s | Sleeping: %s | COM mode: %s | Physics output connected: %s" % [str(bool(telemetry.get("rigid_body_frozen", false))), str(bool(telemetry.get("ship_is_sleeping", false))), str(telemetry.get("center_of_mass_mode", "AUTO")), str(bool(telemetry.get("physics_output_connected", false)))])
 	lines.append("")
 	lines.append("[ FCC RATE LOOP ]")
@@ -303,74 +289,6 @@ func close_display_settings() -> void:
 	_settings_open = false
 	_settings_overlay.visible = false
 	Input.mouse_mode = _previous_mouse_mode
-
-
-## Creates a transparent 2D instrument canvas and maps it onto a non-billboarded
-## quad fixed to the ship's forward windshield. Camera head-look therefore
-## changes the quad's screen position naturally; it does not follow the camera.
-func _build_windshield_projection() -> void:
-	var flight_controller: Node = get_parent()
-	var ship: Node3D = null
-	if is_instance_valid(flight_controller):
-		ship = flight_controller.get_parent() as Node3D
-	if ship == null:
-		push_error("FlightHUD must be a child of FlightController under the ship.")
-		return
-
-	_windshield_viewport = SubViewport.new()
-	_windshield_viewport.name = "WindshieldHUDViewport"
-	_windshield_viewport.size = Vector2i(1280, 720)
-	_windshield_viewport.transparent_bg = true
-	_windshield_viewport.gui_disable_input = true
-	_windshield_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	_windshield_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
-	add_child(_windshield_viewport)
-
-	_windshield_display = Control.new()
-	_windshield_display.name = "WindshieldFlightDisplay"
-	_windshield_display.set_script(HUD_OVERLAY_SCRIPT)
-	_windshield_display.set("render_mode", &"WINDSHIELD")
-	_windshield_display.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_windshield_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_windshield_viewport.add_child(_windshield_display)
-
-	_windshield_projection_root = Node3D.new()
-	_windshield_projection_root.name = "CockpitWindshieldProjection"
-	ship.add_child(_windshield_projection_root)
-
-	var quad := QuadMesh.new()
-	quad.size = Vector2(2.78, 1.56375)
-	_windshield_surface = MeshInstance3D.new()
-	_windshield_surface.name = "WindshieldHUDSurface"
-	_windshield_surface.position = Vector3(0.0, 0.12, -2.36)
-	_windshield_surface.mesh = quad
-	_windshield_surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_windshield_surface.extra_cull_margin = 1.0
-
-	var projection_material := StandardMaterial3D.new()
-	projection_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	projection_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	projection_material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	projection_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	projection_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	projection_material.albedo_texture = _windshield_viewport.get_texture()
-	projection_material.albedo_color = Color(0.88, 1.0, 0.92, 0.92)
-	projection_material.emission_enabled = true
-	projection_material.emission = Color(0.55, 0.85, 0.68, 1.0)
-	projection_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	_windshield_surface.material_override = projection_material
-	_windshield_projection_root.add_child(_windshield_surface)
-	_windshield_surface.visible = false
-
-
-func set_cockpit_active(active: bool) -> void:
-	_cockpit_active = active
-	_update_windshield_visibility(bool(_telemetry_cache_debug_enabled))
-
-
-func _update_windshield_visibility(debug_enabled: bool) -> void:
-	if is_instance_valid(_windshield_surface):
-		_windshield_surface.visible = _cockpit_active and _camera_in_cockpit and not debug_enabled
 
 
 func _build_display_settings_overlay() -> void:

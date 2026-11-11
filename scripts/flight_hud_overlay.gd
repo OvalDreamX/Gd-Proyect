@@ -1,7 +1,7 @@
 extends Control
 class_name FlightHUDOverlay
 
-## Cockpit-only primary flight display. This script is presentation-only:
+## Screen-space flight display. Central symbology is cockpit-alignment gated; side instruments persist in external view.
 ## it reads telemetry snapshots and never changes ship input or physics.
 
 const COLOR_PRIMARY := Color(0.50, 1.00, 0.78, 0.92)
@@ -11,7 +11,9 @@ const COLOR_COMMAND := Color(1.00, 0.77, 0.36, 0.96)
 const COLOR_WARNING := Color(1.00, 0.48, 0.30, 0.96)
 const COLOR_FLIGHT_PATH := Color(0.48, 0.88, 1.00, 0.96)
 const HUD_CONTENT_SCALE: float = 0.90
-const FLIGHT_PATH_MAX_ANGLE_DEGREES: float = 23.0
+const FLIGHT_PATH_MIN_SPEED_MPS: float = 2.0
+const FLIGHT_PATH_BOUNDS: Rect2 = Rect2(250.0, 140.0, 780.0, 352.0)
+# Calibrated perspective projection for the existing 1280x720 HUD layout.
 const BASE_WIDTH: float = 1280.0
 const BASE_HEIGHT: float = 720.0
 const WINDSHIELD_REFERENCE_DISTANCE_M: float = 0.91
@@ -21,9 +23,6 @@ const PITCH_LADDER_LIMIT_PX: float = 158.0
 const WINDSHIELD_FOCAL_X_PX: float = BASE_WIDTH * WINDSHIELD_REFERENCE_DISTANCE_M / WINDSHIELD_WIDTH_M
 const WINDSHIELD_FOCAL_Y_PX: float = BASE_HEIGHT * WINDSHIELD_REFERENCE_DISTANCE_M / WINDSHIELD_ACTIVE_HEIGHT_M
 
-## SIDES stays in the 2D display layer; WINDSHIELD is drawn into a SubViewport
-## texture on a physical quad attached to the ship's forward cockpit window.
-var render_mode: StringName = &"FULL"
 var _telemetry: Dictionary = {}
 
 
@@ -32,18 +31,18 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	queue_redraw()
 
 
-## Projects the ship's world-space velocity into the cockpit's forward view.
-## The returned marker is relative to the nose reference, not the horizon.
-## Reverse/sideways motion is intentionally hidden because it is outside this
-## forward-looking HUD's useful projection range.
+## Projects inertial velocity into the active camera perspective, as the F-16 FPM does.
+## Out-of-field vectors are moved to the HUD edge and flagged for the X cue.
 static func calculate_flight_path_marker(
 		velocity_world: Vector3,
-		reference_basis: Basis,
+		view_basis: Basis,
 		hud_center: Vector2,
-		focal_x_pixels: float = WINDSHIELD_FOCAL_X_PX,
-		maximum_angle_degrees: float = FLIGHT_PATH_MAX_ANGLE_DEGREES,
-		minimum_speed_mps: float = 2.0
+		focal_pixels: float = WINDSHIELD_FOCAL_Y_PX,
+		bounds: Rect2 = FLIGHT_PATH_BOUNDS,
+		minimum_speed_mps: float = FLIGHT_PATH_MIN_SPEED_MPS
 ) -> Dictionary:
+	# F-16-style FPM: project the inertial velocity direction through the same
+	# perspective as the active camera. It is independent of the ship's nose axis.
 	var result: Dictionary = {
 		"visible": false,
 		"position": hud_center,
@@ -51,30 +50,65 @@ static func calculate_flight_path_marker(
 		"lateral_angle_degrees": 0.0,
 		"vertical_angle_degrees": 0.0,
 		"clipped": false,
+		"behind_camera": false,
 	}
 	if velocity_world.length_squared() < minimum_speed_mps * minimum_speed_mps:
 		return result
 
-	var local_velocity: Vector3 = reference_basis.orthonormalized().inverse() * velocity_world
+	var local_velocity: Vector3 = view_basis.orthonormalized().inverse() * velocity_world
 	var forward_speed: float = -local_velocity.z
-	if forward_speed < 1.0:
-		return result
+	var lateral_angle: float = atan2(local_velocity.x, forward_speed)
+	var vertical_reference_speed: float = sqrt(local_velocity.x * local_velocity.x + forward_speed * forward_speed)
+	var vertical_angle: float = atan2(local_velocity.y, vertical_reference_speed)
+	# Vectors in front of the camera use perspective projection. Vectors behind
+	# it cannot be projected onto the combiner and are represented by an edge cue.
+	var raw_position: Vector2
+	if forward_speed > 0.0001:
+		# In front of the combiner: use true pinhole perspective projection.
+		var projected_x: float = focal_pixels * local_velocity.x / forward_speed
+		var projected_y: float = focal_pixels * local_velocity.y / forward_speed
+		raw_position = hud_center + Vector2(projected_x, -projected_y)
+	else:
+		# A vector behind the camera has no finite forward projection. Keep its
+		# edge cue on the side indicated by its camera-plane components. Exactly
+		# aft has no unique 2-D bearing, so use the bottom edge as a clear cue.
+		var rear_direction := Vector2(local_velocity.x, -local_velocity.y)
+		if rear_direction.length_squared() <= 0.000001:
+			rear_direction = Vector2.DOWN
+		else:
+			rear_direction = rear_direction.normalized()
+		raw_position = hud_center + rear_direction * maxf(bounds.size.x, bounds.size.y) * 2.0
+	var inset: Vector2 = Vector2(8.0, 8.0)
+	var minimum: Vector2 = bounds.position + inset
+	var maximum: Vector2 = bounds.end - inset
+	var clipped: bool = forward_speed <= 0.0001 or (
+		raw_position.x < minimum.x or raw_position.x > maximum.x
+		or raw_position.y < minimum.y or raw_position.y > maximum.y
+	)
+	var marker_position: Vector2 = raw_position
+	if clipped:
+		# Intersect the boresight-to-vector ray with the HUD rectangle. Clamping
+		# X and Y independently would drag diagonal cues into a corner and lose
+		the actual direction of travel.
+		var ray: Vector2 = raw_position - hud_center
+		var scale_x: float = 1.0e20
+		var scale_y: float = 1.0e20
+		if ray.x > 0.000001:
+			scale_x = (maximum.x - hud_center.x) / ray.x
+		elif ray.x < -0.000001:
+			scale_x = (minimum.x - hud_center.x) / ray.x
+		if ray.y > 0.000001:
+			scale_y = (maximum.y - hud_center.y) / ray.y
+		elif ray.y < -0.000001:
+			scale_y = (minimum.y - hud_center.y) / ray.y
+		marker_position = hud_center + ray * maxf(minf(scale_x, scale_y), 0.0)
 
-	var lateral_angle: float = rad_to_deg(atan2(local_velocity.x, forward_speed))
-	var vertical_reference_speed: float = sqrt(
-		local_velocity.x * local_velocity.x + forward_speed * forward_speed
-	)
-	var vertical_angle: float = rad_to_deg(atan2(local_velocity.y, vertical_reference_speed))
-	var clipped_lateral: float = clampf(lateral_angle, -maximum_angle_degrees, maximum_angle_degrees)
-	var clipped_vertical: float = clampf(vertical_angle, -maximum_angle_degrees, maximum_angle_degrees)
 	result["visible"] = true
-	result["position"] = hud_center + Vector2(
-		focal_x_pixels * tan(deg_to_rad(clipped_lateral)),
-		-WINDSHIELD_FOCAL_Y_PX * tan(deg_to_rad(clipped_vertical))
-	)
-	result["lateral_angle_degrees"] = lateral_angle
-	result["vertical_angle_degrees"] = vertical_angle
-	result["clipped"] = not is_equal_approx(lateral_angle, clipped_lateral) or not is_equal_approx(vertical_angle, clipped_vertical)
+	result["position"] = marker_position
+	result["lateral_angle_degrees"] = rad_to_deg(lateral_angle)
+	result["vertical_angle_degrees"] = rad_to_deg(vertical_angle)
+	result["clipped"] = clipped
+	result["behind_camera"] = forward_speed <= 0.0001
 	return result
 
 
@@ -82,87 +116,74 @@ func _draw() -> void:
 	if _telemetry.is_empty() or size.x <= 0.0 or size.y <= 0.0:
 		return
 
-	var font: Font = ThemeDB.fallback_font
 	var fit_scale: float = minf(size.x / BASE_WIDTH, size.y / BASE_HEIGHT)
-	var scale_factor: float = fit_scale
-	var draw_offset := Vector2.ZERO
-	if render_mode != &"WINDSHIELD":
-		var ui_scale: float = 1.0
-		var display_settings: Node = get_node_or_null("/root/DisplaySettings")
-		if display_settings != null and display_settings.has_method("get_hud_scale"):
-			ui_scale = float(display_settings.call("get_hud_scale"))
-		scale_factor *= clampf(ui_scale, 0.8, 1.0) * HUD_CONTENT_SCALE
-		var logical_size: Vector2 = size / maxf(scale_factor, 0.001)
-		draw_offset = (logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)) * 0.5
+	var ui_scale: float = 1.0
+	var display_settings: Node = get_node_or_null("/root/DisplaySettings")
+	if display_settings != null and display_settings.has_method("get_hud_scale"):
+		ui_scale = float(display_settings.call("get_hud_scale"))
+	var scale_factor: float = fit_scale * clampf(ui_scale, 0.8, 1.0) * HUD_CONTENT_SCALE
+	var logical_size: Vector2 = size / maxf(scale_factor, 0.001)
+	var extra_space: Vector2 = logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)
+	var draw_offset := extra_space * 0.5
 	draw_set_transform(draw_offset, 0.0, Vector2.ONE * scale_factor)
 
-	var pitch_input: float = float(_telemetry.get("pitch_command", 0.0))
-	var roll_input: float = float(_telemetry.get("roll_command", 0.0))
-	var yaw_input: float = float(_telemetry.get("yaw_command", 0.0))
-
-	if render_mode == &"SIDES":
-		var extra_space: Vector2 = (size / maxf(scale_factor, 0.001)) - Vector2(BASE_WIDTH, BASE_HEIGHT)
-		var left_gauge_x: float = 88.0 - extra_space.x * 0.5
-		var right_gauge_x: float = 1178.0 + extra_space.x * 0.5
-		_draw_side_gauge(
-			font, left_gauge_x, "MAIN VECTOR", "OUTPUT",
-			float(_telemetry.get("field_power_output", 0.0)),
-			float(_telemetry.get("field_power_command", 0.0)),
-			1.0, "%"
-		)
-		_draw_side_gauge(
-			font, right_gauge_x, "VECTOR ANGLE", "ACTUATOR",
-			float(_telemetry.get("vector_distribution_actual_degrees", 90.0)),
-			float(_telemetry.get("vector_distribution_degrees", 90.0)),
-			110.0, "°"
-		)
-		_draw_input_indicators(font, pitch_input, roll_input, yaw_input)
-		_draw_bottom_guidance(font)
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-		return
-
-	# The normal windshield display consumes instrument outputs only. Its
-	# renderer does not inspect RigidBody3D or atmosphere-model state directly.
-	var attitude_basis: Basis = _telemetry.get("instrument_attitude_basis_world", Basis.IDENTITY)
-	attitude_basis = attitude_basis.orthonormalized()
-	var flight_velocity: Vector3 = _telemetry.get("instrument_velocity_world", Vector3.ZERO)
-	var pitch_degrees: float = float(_telemetry.get("instrument_pitch_degrees", 0.0))
-	var bank_degrees: float = float(_telemetry.get("instrument_bank_degrees", 0.0))
-	var heading_degrees: float = float(_telemetry.get("instrument_heading_degrees", 0.0))
-	var altitude_m: float = float(_telemetry.get("instrument_altitude_m", 0.0))
-	var vertical_speed_mps: float = float(_telemetry.get("instrument_vertical_speed_mps", 0.0))
+	var font: Font = ThemeDB.fallback_font
+	# Flight instruments consume the sensor snapshot only. Raw rigid-body and
+	# flight-model values remain available to diagnostics, not to the renderer.
+	var view_basis: Basis = _telemetry.get("view_camera_global_basis", Basis.IDENTITY).orthonormalized()
+	var local_altitude: float = float(_telemetry.get("instrument_altitude_m", 0.0))
+	var local_vertical_speed: float = float(_telemetry.get("instrument_vertical_speed_mps", 0.0))
+	var flight_path_velocity: Vector3 = _telemetry.get("instrument_inertial_velocity_world", Vector3.ZERO)
+	var indicated_velocity: Vector3 = _telemetry.get("instrument_air_relative_velocity_world", flight_path_velocity)
+	var indicated_speed_mps: float = float(_telemetry.get("instrument_speed_mps", indicated_velocity.length()))
 	var speed_label: String = str(_telemetry.get("instrument_speed_label", "SPEED"))
+	var pitch_degrees: float = float(_telemetry.get("instrument_pitch_degrees", 0.0))
+	var roll_degrees: float = float(_telemetry.get("instrument_bank_degrees", 0.0))
+	var heading_degrees: float = float(_telemetry.get("instrument_heading_degrees", 0.0))
 	var attitude_valid: bool = bool(_telemetry.get("instrument_attitude_valid", false))
 	var heading_valid: bool = bool(_telemetry.get("instrument_heading_valid", false))
 	var velocity_valid: bool = bool(_telemetry.get("instrument_velocity_valid", false))
 	var altitude_valid: bool = bool(_telemetry.get("instrument_altitude_valid", false))
+	var camera_fov_degrees: float = clampf(float(_telemetry.get("cockpit_camera_fov_degrees", 78.0)), 20.0, 120.0)
+	var camera_focal_pixels: float = BASE_HEIGHT / (2.0 * tan(deg_to_rad(camera_fov_degrees) * 0.5))
+	var pitch_input: float = float(_telemetry.get("pitch_command", 0.0))
+	var roll_input: float = float(_telemetry.get("roll_command", 0.0))
+	var yaw_input: float = float(_telemetry.get("yaw_command", 0.0))
 	var field_state: String = str(_telemetry.get("field_state", "OFF"))
 	var assistance_enabled: bool = bool(_telemetry.get("fcc_assistance_enabled", true))
 
-	_draw_top_status(font, field_state, assistance_enabled)
-	if heading_valid:
-		_draw_heading_tape(font, heading_degrees)
-	else:
-		_draw_text(font, Vector2(584.0, 176.0), "HDG ---", 12, COLOR_WARNING, HORIZONTAL_ALIGNMENT_CENTER, 112.0)
-	_draw_flight_data(
-		font,
-		flight_velocity,
-		altitude_m,
-		vertical_speed_mps,
-		speed_label,
-		pitch_degrees,
-		bank_degrees,
-		heading_degrees,
-		velocity_valid,
-		altitude_valid,
-		heading_valid
+	var left_gauge_x: float = 88.0 - extra_space.x * 0.5
+	var right_gauge_x: float = 1178.0 + extra_space.x * 0.5
+	_draw_side_gauge(
+		font, left_gauge_x, "MAIN VECTOR", "OUTPUT",
+		float(_telemetry.get("field_power_output", 0.0)),
+		float(_telemetry.get("field_power_command", 0.0)),
+		1.0, "%"
 	)
-	if attitude_valid:
-		_draw_attitude_ladder(font, pitch_degrees, bank_degrees)
-	else:
-		_draw_text(font, Vector2(555.0, 368.0), "ATTITUDE FAIL", 13, COLOR_WARNING, HORIZONTAL_ALIGNMENT_CENTER, 170.0)
-	if velocity_valid and attitude_valid:
-		_draw_flight_path_marker(flight_velocity, attitude_basis)
+	_draw_side_gauge(
+		font, right_gauge_x, "VECTOR ANGLE", "ACTUATOR",
+		float(_telemetry.get("vector_distribution_actual_degrees", 90.0)),
+		float(_telemetry.get("vector_distribution_degrees", 90.0)),
+		110.0, "°"
+	)
+
+	if is_central_hud_visible(_telemetry):
+		_draw_top_status(font, field_state, assistance_enabled)
+		if heading_valid:
+			_draw_heading_tape(font, heading_degrees, camera_focal_pixels)
+		_draw_flight_data(
+			font, indicated_speed_mps, local_altitude, local_vertical_speed, speed_label,
+			pitch_degrees, roll_degrees, heading_degrees,
+			attitude_valid, heading_valid, velocity_valid, altitude_valid
+		)
+		if attitude_valid:
+			_draw_attitude_ladder(font, pitch_degrees, roll_degrees, camera_focal_pixels)
+		if velocity_valid:
+			_draw_flight_path_marker(flight_path_velocity, view_basis, camera_focal_pixels)
+
+	# These instruments are screen-fixed and remain visible in external view.
+	_draw_input_indicators(font, pitch_input, roll_input, yaw_input)
+	_draw_bottom_guidance(font)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -266,48 +287,64 @@ func _draw_corner_frame() -> void:
 	draw_line(corners[3], corners[3] - Vector2(0, arm), frame_color, 0.7)
 
 
-func _draw_heading_tape(font: Font, heading_degrees: float) -> void:
+static func heading_label_degrees(heading_degrees: float, offset_degrees: float = 0.0) -> int:
+	# Normalize after rounding as well: 359.6° must display as 000°, not 360°.
+	return int(round(fposmod(heading_degrees + offset_degrees, 360.0))) % 360
+
+
+static func is_central_hud_visible(telemetry: Dictionary) -> bool:
+	return str(telemetry.get("camera_view", "COCKPIT")) == "COCKPIT" and bool(telemetry.get("cockpit_camera_centered", true))
+
+
+func _draw_heading_tape(font: Font, heading_degrees: float, focal_pixels: float) -> void:
 	var center_x: float = 640.0
 	var y: float = 151.0
 	var edge_angle: float = 40.0
-	var left_x: float = center_x + WINDSHIELD_FOCAL_X_PX * tan(deg_to_rad(-edge_angle))
-	var right_x: float = center_x + WINDSHIELD_FOCAL_X_PX * tan(deg_to_rad(edge_angle))
+	var left_x: float = center_x + focal_pixels * tan(deg_to_rad(-edge_angle))
+	var right_x: float = center_x + focal_pixels * tan(deg_to_rad(edge_angle))
 	draw_line(Vector2(left_x, y), Vector2(right_x, y), COLOR_DIM, 0.7)
 	for offset in range(-40, 41, 5):
-		var tick_x: float = center_x + WINDSHIELD_FOCAL_X_PX * tan(deg_to_rad(float(offset)))
+		var tick_x: float = center_x + focal_pixels * tan(deg_to_rad(float(offset)))
 		var tick_height: float = 13.0 if posmod(offset, 10) == 0 else 6.0
 		draw_line(Vector2(tick_x, y), Vector2(tick_x, y + tick_height), COLOR_SECONDARY, 0.7)
 		if posmod(offset, 10) == 0:
-			var label_heading: int = int(round(fposmod(heading_degrees + float(offset), 360.0)))
-			_draw_text(font, Vector2(tick_x - 16.0, y - 8.0), "%03d" % label_heading, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 32.0)
+			var label_heading: int = heading_label_degrees(heading_degrees, float(offset))
+			var cardinal: String = ""
+			match label_heading:
+				0:
+					cardinal = "N"
+				90:
+					cardinal = "E"
+				180:
+					cardinal = "S"
+				270:
+					cardinal = "W"
+			var label_text: String = cardinal if not cardinal.is_empty() else "%03d" % label_heading
+			_draw_text(font, Vector2(tick_x - 16.0, y - 8.0), label_text, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 32.0)
 	draw_line(Vector2(center_x, y - 6.0), Vector2(center_x, y + 17.0), COLOR_PRIMARY, 1.3)
 	draw_line(Vector2(center_x - 5.0, y - 6.0), Vector2(center_x + 5.0, y - 6.0), COLOR_PRIMARY, 1.1)
-	_draw_text(font, Vector2(center_x - 42.0, 176.0), "%03d°" % (int(round(heading_degrees)) % 360), 12, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 84.0)
-
+	_draw_text(font, Vector2(center_x - 42.0, 176.0), "%03d°" % heading_label_degrees(heading_degrees), 12, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 84.0)
 
 func _draw_flight_data(
 		font: Font,
-		flight_velocity: Vector3,
+		flight_speed_mps: float,
 		local_altitude: float,
 		local_vertical_speed: float,
 		speed_label: String,
 		pitch_degrees: float,
-		bank_degrees: float,
+		roll_degrees: float,
 		heading_degrees: float,
+		attitude_valid: bool,
+		heading_valid: bool,
 		velocity_valid: bool,
-		altitude_valid: bool,
-		heading_valid: bool
+		altitude_valid: bool
 ) -> void:
-	var speed_text: String = String.num(flight_velocity.length(), 1) if velocity_valid else "---.-"
-	var altitude_text: String = String.num(local_altitude, 1) if altitude_valid else "----"
-	var vertical_text: String = "%+.1f" % local_vertical_speed if velocity_valid else "---.-"
-	var attitude_text: String = "%+.1f / %+.1f" % [pitch_degrees, bank_degrees] if bool(_telemetry.get("instrument_attitude_valid", false)) else "--- / ---"
-	_draw_data_block(font, Vector2(278.0, 230.0), speed_label, speed_text, "m/s")
-	_draw_data_block(font, Vector2(892.0, 230.0), "LOCAL ALT", altitude_text, "m")
-	_draw_data_block(font, Vector2(278.0, 390.0), "VERT SPEED", vertical_text, "m/s")
-	_draw_data_block(font, Vector2(892.0, 390.0), "ATTITUDE", attitude_text, "PITCH / BANK")
-	var heading_text: String = "HDG %03d°" % (int(round(heading_degrees)) % 360) if heading_valid else "HDG ---"
-	_draw_text(font, Vector2(570.0, 430.0), heading_text, 11, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 140.0)
+	_draw_data_block(font, Vector2(278.0, 230.0), speed_label, String.num(flight_speed_mps, 1) if velocity_valid else "---", "m/s")
+	_draw_data_block(font, Vector2(892.0, 230.0), "LOCAL ALT", String.num(local_altitude, 1) if altitude_valid else "---", "m")
+	_draw_data_block(font, Vector2(278.0, 466.0), "VERT SPEED", "%+.1f" % local_vertical_speed if velocity_valid else "---", "m/s")
+	_draw_data_block(font, Vector2(892.0, 466.0), "ATTITUDE", "%+.1f / %+.1f" % [pitch_degrees, roll_degrees] if attitude_valid else "--- / ---", "PITCH / BANK")
+	var heading_text: String = "HDG %03d°" % int(round(heading_degrees)) if heading_valid else "HDG ---"
+	_draw_text(font, Vector2(570.0, 493.0), heading_text, 11, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 140.0)
 
 
 func _draw_data_block(font: Font, origin: Vector2, title: String, value: String, unit: String) -> void:
@@ -324,35 +361,25 @@ static func calculate_pitch_mark_offset_pixels(
 	return focal_pixels * tan(deg_to_rad(ship_pitch_degrees - pitch_mark_degrees))
 
 
-func _draw_attitude_ladder(font: Font, pitch_degrees: float, bank_degrees: float) -> void:
-	# The ladder is calibrated as a perspective projection onto the windshield
-	# plane. The focal length is derived from the eye-to-glass distance and the
-	# physical display height, rather than an arbitrary pixels-per-degree value.
+func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float, focal_pixels: float) -> void:
+	# The sensor suite supplies attitude; this function only projects its values
+	# into the HUD's perspective geometry.
 	var center := Vector2(640.0, 360.0)
-	var focal_pixels: float = WINDSHIELD_FOCAL_Y_PX
-	var ladder_rotation: float = deg_to_rad(-bank_degrees)
-
+	var ladder_rotation: float = deg_to_rad(-roll_degrees)
 	for mark in range(-40, 41, 5):
 		var line_y: float = calculate_pitch_mark_offset_pixels(pitch_degrees, float(mark), focal_pixels)
 		if absf(line_y) > PITCH_LADDER_LIMIT_PX:
 			continue
-
 		var is_major: bool = posmod(abs(mark), 10) == 0
 		var is_horizon: bool = mark == 0
 		var half_width: float = 148.0 if is_horizon else (112.0 if is_major else 58.0)
 		var color: Color = COLOR_PRIMARY if is_horizon else COLOR_SECONDARY
-		var local_start := Vector2(-half_width, line_y)
-		var local_end := Vector2(half_width, line_y)
-		var start_point: Vector2 = _rotate_point(local_start, center, ladder_rotation)
-		var end_point: Vector2 = _rotate_point(local_end, center, ladder_rotation)
-
-		# Positive pitch marks are solid; negative marks are broken, matching
-		# the familiar fighter-HUD convention for climb/dive cues.
+		var start_point: Vector2 = _rotate_point(Vector2(-half_width, line_y), center, ladder_rotation)
+		var end_point: Vector2 = _rotate_point(Vector2(half_width, line_y), center, ladder_rotation)
 		if mark < 0 and not is_horizon:
 			_draw_broken_line(start_point, end_point, color, 0.8, 8.0, 5.0)
 		else:
 			draw_line(start_point, end_point, color, 1.0 if is_horizon else (0.8 if is_major else 0.65))
-
 		if is_major and not is_horizon:
 			var label_text: String = str(abs(mark))
 			var left_label: Vector2 = _rotate_point(Vector2(-half_width - 25.0, line_y + 4.0), center, ladder_rotation)
@@ -360,7 +387,7 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, bank_degrees: float
 			_draw_text(font, left_label, label_text, 10, COLOR_SECONDARY)
 			_draw_text(font, right_label, label_text, 10, COLOR_SECONDARY)
 
-	# Bank scale: fixed to the window, with the moving index showing measured bank.
+	# Fixed bank scale and moving bank pointer.
 	var bank_center := Vector2(640.0, 230.0)
 	var bank_radius: float = 52.0
 	for angle_degrees in range(-60, 61, 10):
@@ -369,13 +396,11 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, bank_degrees: float
 		var outer: Vector2 = bank_center + direction * bank_radius
 		var inner: Vector2 = bank_center + direction * (bank_radius - (13.0 if posmod(angle_degrees, 30) == 0 else 7.0))
 		draw_line(inner, outer, COLOR_SECONDARY, 0.7)
-	var pointer_angle: float = deg_to_rad(-90.0 - clampf(bank_degrees, -60.0, 60.0))
+	var pointer_angle: float = deg_to_rad(-90.0 - clampf(roll_degrees, -60.0, 60.0))
 	var pointer_direction := Vector2(cos(pointer_angle), sin(pointer_angle))
-	var pointer_base := bank_center + pointer_direction * (bank_radius - 19.0)
-	var pointer_tip := bank_center + pointer_direction * (bank_radius + 1.0)
-	draw_line(pointer_base, pointer_tip, COLOR_PRIMARY, 1.5)
+	draw_line(bank_center + pointer_direction * (bank_radius - 19.0), bank_center + pointer_direction * (bank_radius + 1.0), COLOR_PRIMARY, 1.5)
 
-	# Fixed aircraft reference / boresight. Unlike the ladder, this does not move.
+	# Fixed aircraft reference / boresight.
 	draw_line(Vector2(573.0, center.y), Vector2(619.0, center.y), COLOR_PRIMARY, 1.6)
 	draw_line(Vector2(661.0, center.y), Vector2(707.0, center.y), COLOR_PRIMARY, 1.6)
 	draw_line(Vector2(619.0, center.y), Vector2(630.0, center.y + 7.0), COLOR_PRIMARY, 1.3)
@@ -383,14 +408,7 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, bank_degrees: float
 	draw_circle(center, 2.0, COLOR_PRIMARY)
 
 
-func _draw_broken_line(
-		start_point: Vector2,
-		end_point: Vector2,
-		color: Color,
-		width: float,
-		dash_length: float,
-		gap_length: float
-) -> void:
+func _draw_broken_line(start_point: Vector2, end_point: Vector2, color: Color, width: float, dash_length: float, gap_length: float) -> void:
 	var total_length: float = start_point.distance_to(end_point)
 	if total_length <= 0.001:
 		return
@@ -401,22 +419,25 @@ func _draw_broken_line(
 		draw_line(start_point + direction * cursor, start_point + direction * segment_end, color, width)
 		cursor = segment_end + gap_length
 
-
-func _draw_flight_path_marker(velocity_world: Vector3, ship_basis: Basis) -> void:
+func _draw_flight_path_marker(velocity_world: Vector3, view_basis: Basis, focal_pixels: float) -> void:
 	var center := Vector2(640.0, 360.0)
-	var marker: Dictionary = calculate_flight_path_marker(velocity_world, ship_basis, center)
+	var marker: Dictionary = calculate_flight_path_marker(
+		velocity_world, view_basis, center, focal_pixels, FLIGHT_PATH_BOUNDS
+	)
 	if not bool(marker.get("visible", false)):
 		return
 
 	var point: Vector2 = marker.get("position", center)
-	var wing_span: float = 10.0
-	var tail_length: float = 6.0
-	# Distinct cyan flight-path symbol; the fixed green aircraft reference remains
-	# the nose/boresight. Their separation visualizes angle of attack and drift.
-	draw_line(point + Vector2(-wing_span, 0.0), point + Vector2(-3.0, 0.0), COLOR_FLIGHT_PATH, 1.1)
-	draw_line(point + Vector2(3.0, 0.0), point + Vector2(wing_span, 0.0), COLOR_FLIGHT_PATH, 1.1)
-	draw_line(point + Vector2(0.0, -3.0), point + Vector2(0.0, -tail_length), COLOR_FLIGHT_PATH, 0.9)
+	# The normal FPM is a circle with short lateral wings and a top tail.
 	draw_arc(point, 3.0, 0.0, TAU, 20, COLOR_FLIGHT_PATH, 1.0)
+	if bool(marker.get("clipped", false)):
+		# F-16 out-of-field cue: retain the same circle size and superimpose an X.
+		draw_line(point + Vector2(-3.0, -3.0), point + Vector2(3.0, 3.0), COLOR_FLIGHT_PATH, 1.0)
+		draw_line(point + Vector2(-3.0, 3.0), point + Vector2(3.0, -3.0), COLOR_FLIGHT_PATH, 1.0)
+		return
+	draw_line(point + Vector2(-10.0, 0.0), point + Vector2(-3.0, 0.0), COLOR_FLIGHT_PATH, 1.1)
+	draw_line(point + Vector2(3.0, 0.0), point + Vector2(10.0, 0.0), COLOR_FLIGHT_PATH, 1.1)
+	draw_line(point + Vector2(0.0, -3.0), point + Vector2(0.0, -6.0), COLOR_FLIGHT_PATH, 0.9)
 
 
 func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, yaw_input: float) -> void:

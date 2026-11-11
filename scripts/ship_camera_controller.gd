@@ -104,6 +104,10 @@ func zoom_external(direction: float, event_factor: float = 1.0) -> void:
 	)
 
 
+func get_cockpit_fov_degrees() -> float:
+	return _cockpit_camera.fov if is_instance_valid(_cockpit_camera) else 78.0
+
+
 ## Routes captured mouse motion to the currently selected camera only.
 func apply_mouse_look(screen_relative: Vector2) -> void:
 	if _using_external_view:
@@ -157,6 +161,29 @@ func reset_camera_state() -> void:
 		0.0
 	)
 	_apply_view_visibility()
+
+
+## Smoothly returns the cockpit camera toward its scene-authored boresight.
+## Returns true while the camera is still moving, false once centered.
+func recenter_cockpit_camera(delta: float, response: float = 7.0) -> bool:
+	if _using_external_view:
+		return false
+	var blend: float = 1.0 - exp(-maxf(response, 0.1) * maxf(delta, 0.0))
+	_cockpit_yaw_radians = lerpf(_cockpit_yaw_radians, 0.0, blend)
+	_cockpit_pitch_radians = lerpf(_cockpit_pitch_radians, 0.0, blend)
+	if absf(_cockpit_yaw_radians) < deg_to_rad(0.08):
+		_cockpit_yaw_radians = 0.0
+	if absf(_cockpit_pitch_radians) < deg_to_rad(0.08):
+		_cockpit_pitch_radians = 0.0
+	_cockpit_camera.rotation = _cockpit_base_rotation + Vector3(_cockpit_pitch_radians, _cockpit_yaw_radians, 0.0)
+	return not is_zero_approx(_cockpit_yaw_radians) or not is_zero_approx(_cockpit_pitch_radians)
+
+
+func is_cockpit_camera_centered(tolerance_degrees: float = 0.5) -> bool:
+	if _using_external_view:
+		return false
+	var tolerance: float = deg_to_rad(maxf(tolerance_degrees, 0.0))
+	return absf(_cockpit_yaw_radians) <= tolerance and absf(_cockpit_pitch_radians) <= tolerance
 
 
 func is_external_view() -> bool:
