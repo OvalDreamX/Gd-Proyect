@@ -177,7 +177,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if _debug_interaction_mode:
-				get_viewport().set_input_as_handled()
+				# GUI controls have already had the opportunity to consume wheel input.
 				return
 			if _camera_controller.is_external_view():
 				var zoom_direction: float = 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0

@@ -1,0 +1,17 @@
+SPACE TRUCKER CLEANUP RECOMMENDATIONS
+======================================
+
+No existing project files need to be deleted for this overwrite.
+
+Keep: all scripts, scenes, resources, tests, .gd.uid sidecars, and the canonical GDD.
+
+Candidate documentation cleanup only after a manual content comparison:
+1. docs/Space_Trucker_Game_Design_Document_v0_1.md — likely duplicate of
+   docs/GAME_DESIGN_DOCUMENT_v0_1.md. Compare before deleting either copy.
+2. docs/GDD_ANNEX_Modeling.md — merge any still-useful proposal material into
+   docs/FUTURE_PHASES.md before archiving or deleting it.
+3. Older DOCX/PDF GDD exports — keep them only if they are intentionally
+   maintained release snapshots.
+
+Do not delete scripts/flight_hud_phase_2u.gd. The current flight controller
+loads this script. Do not delete .gd.uid sidecars.

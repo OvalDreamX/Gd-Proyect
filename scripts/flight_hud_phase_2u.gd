@@ -48,6 +48,9 @@ func _update_cargo_labels() -> void:
 
 
 func _update_debug_text(telemetry: Dictionary) -> void:
+	# The base HUD rebuilds the diagnostic TextEdit first. Preserve the reader's
+	# position across the Phase 2U wording corrections and appended trim block.
+	var previous_scroll: float = _debug_text_label.scroll_vertical
 	super._update_debug_text(telemetry)
 
 	var integral_trim: Vector3 = telemetry.get("fcc_integral_trim_output_by_axis", Vector3.ZERO)
@@ -87,3 +90,4 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 		float(telemetry.get("fcc_maximum_control_output", 0.0))
 	]
 	_debug_text_label.text += trim_line
+	_debug_text_label.scroll_vertical = previous_scroll

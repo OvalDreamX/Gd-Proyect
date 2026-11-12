@@ -51,7 +51,21 @@ func _run_tests() -> void:
 		"fcc_maximum_integral_trim_output": 0.25,
 		"fcc_maximum_control_output": 0.8,
 	}
+	var scroll_test_lines: PackedStringArray = PackedStringArray()
+	for line_index in range(80):
+		scroll_test_lines.append("PHASE 2U SCROLL TEST LINE %03d" % line_index)
+	hud._debug_text_label.text = "\n".join(scroll_test_lines)
+	await process_frame
+	hud._debug_text_label.scroll_vertical = 8.0
+	await process_frame
+	var scroll_before_refresh: float = hud._debug_text_label.scroll_vertical
+
 	hud._update_debug_text(telemetry)
+	await process_frame
+	_expect(
+		is_equal_approx(hud._debug_text_label.scroll_vertical, scroll_before_refresh),
+		"Phase 2U diagnostics preserve the reader's scroll position"
+	)
 	_expect(hud._debug_text_label.text.contains("INTEGRAL TRIM COMMAND ACTIVE"), "F3 reports bounded integral trim when active")
 	_expect(not hud._debug_text_label.text.contains("FCC ACTIVE TRIM COMPENSATION"), "F3 removes the old unconditional compensation claim")
 	_expect(hud._debug_text_label.text.contains("does not command a return to level"), "F3 explains that FCC trim is not attitude hold")
