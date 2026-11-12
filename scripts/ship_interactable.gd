@@ -65,6 +65,7 @@ func request_pilot(player: Node) -> void:
 
 	_pilot_claimed = true
 	_active_pilot = player
+	player.tree_exiting.connect(_on_active_pilot_tree_exiting, CONNECT_ONE_SHOT)
 	if player.has_method("clear_nearby_ship"):
 		player.clear_nearby_ship(self)
 
@@ -87,3 +88,13 @@ func _on_pilot_zone_body_entered(body: Node3D) -> void:
 func _on_pilot_zone_body_exited(body: Node3D) -> void:
 	if body.is_in_group("player") and body.has_method("clear_nearby_ship"):
 		body.clear_nearby_ship(self)
+
+
+## Releases the seat if its owner is removed without a normal disembark flow.
+func _on_active_pilot_tree_exiting() -> void:
+	_pilot_claimed = false
+	_active_pilot = null
+	if is_instance_valid(hull_visual):
+		hull_visual.visible = true
+	if is_instance_valid(cockpit_interior):
+		cockpit_interior.visible = false

@@ -1,4 +1,4 @@
-[gd_scene load_steps=29 format=3]
+[gd_scene load_steps=30 format=3]
 
 [ext_resource type="Script" path="res://scripts/ship_interactable.gd" id="1_ship"]
 [ext_resource type="Script" path="res://scripts/ship_flight_controller.gd" id="2_flight_controller"]
@@ -17,6 +17,7 @@
 [ext_resource type="Script" path="res://scripts/atmospheric_flight_model.gd" id="15_atmospheric_flight_model"]
 [ext_resource type="Script" path="res://scripts/flight_sensor_suite.gd" id="16_flight_sensor_suite"]
 [ext_resource type="Script" path="res://scripts/cargo_system.gd" id="17_cargo_system"]
+[ext_resource type="Script" path="res://scripts/planetary_gravity_body.gd" id="18_planetary_gravity"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_hull"]
 size = Vector3(3.6, 1.5, 5.2)
@@ -63,6 +64,10 @@ can_sleep = true
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("BoxShape_hull")
+
+[node name="PlanetaryGravityBody" type="Node" parent="."]
+script = ExtResource("18_planetary_gravity")
+planetary_reference_frame_path = NodePath("../../PlanetaryReferenceFrame")
 
 [node name="PilotZone" type="Area3D" parent="."]
 collision_layer = 0

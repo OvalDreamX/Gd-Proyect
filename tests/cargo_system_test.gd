@@ -4,6 +4,7 @@ extends SceneTree
 ## Verifies manifest calculations against the actual ship RigidBody3D.
 
 const SHIP_SCENE = preload("res://scenes/ship.tscn")
+const CARGO_SCRIPT = preload("res://scripts/cargo_system.gd")
 
 var _checks: int = 0
 var _failures: int = 0
@@ -41,12 +42,20 @@ func _run_tests() -> void:
 	_expect_near(ship.mass, 30000.0, 0.1, "Empty manifest updates the actual RigidBody3D mass")
 	_expect(ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM, "Cargo system selects custom center of mass")
 	_expect(ship.center_of_mass.is_zero_approx(), "Empty ship COM is at the origin")
+	var empty_box_inertia: Vector3 = CARGO_SCRIPT.calculate_box_inertia_diagonal(30000.0, Vector3(3.6, 1.5, 5.2))
+	_expect_near_vector(ship.inertia, empty_box_inertia, 0.1, "Empty ship inertia matches the authored hull box")
 	_expect_near(cargo.get_hover_throttle_estimate(), 30000.0 / (55000.0 * 1.10), 0.01, "Empty hover estimate is ~49.6%")
 
 	cargo.load_preset("MAX_GROSS")
 	_expect_near(cargo.get_total_mass_kg(), 55000.0, 0.1, "Maximum payload produces 55,000 kg gross mass")
 	_expect_near(ship.mass, 55000.0, 0.1, "Maximum payload updates actual rigid-body mass")
 	_expect(ship.center_of_mass.is_zero_approx(), "Centered maximum payload leaves COM at origin")
+	var max_payload_dimensions: Vector3 = Vector3(2.0, 1.0, 3.0)
+	var centered_gross_inertia: Dictionary = CARGO_SCRIPT.calculate_combined_inertia(
+		30000.0, Vector3(3.6, 1.5, 5.2), 25000.0, max_payload_dimensions, Vector3.ZERO
+	)
+	_expect_near_vector(ship.inertia, centered_gross_inertia["diagonal"], 0.1, "Centered payload contributes its own rotational inertia")
+	_expect(ship.inertia.x > empty_box_inertia.x and ship.inertia.y > empty_box_inertia.y and ship.inertia.z > empty_box_inertia.z, "Centered payload increases all three principal-axis moments")
 	_expect_near(cargo.get_hover_throttle_estimate(), 1.0 / 1.10, 0.01, "Maximum gross hover estimate is ~90.9%")
 
 	cargo.load_preset("PORT_HEAVY")
@@ -54,6 +63,13 @@ func _run_tests() -> void:
 	_expect_near(cargo.get_total_mass_kg(), 50000.0, 0.1, "Port-heavy preset produces 50,000 kg gross mass")
 	_expect_near(port_com.x, -1.2, 0.01, "Port-heavy cargo shifts COM to X = -1.2m")
 	_expect_near(ship.center_of_mass.x, -1.2, 0.01, "Port-heavy COM is applied to the actual RigidBody3D")
+	var port_cargo_dimensions: Vector3 = cargo.get_telemetry().get("cargo_distribution_dimensions_local_m", Vector3.ZERO)
+	var port_inertia_data: Dictionary = CARGO_SCRIPT.calculate_combined_inertia(
+		30000.0, Vector3(3.6, 1.5, 5.2), 20000.0,
+		port_cargo_dimensions, Vector3(-3.0, 0.0, 0.0)
+	)
+	_expect_near_vector(ship.inertia, port_inertia_data["diagonal"], 0.1, "Offset cargo inertia includes parallel-axis contributions about the combined COM")
+	_expect(Vector3(cargo.get_telemetry()["inertia_products_kg_m2"]).length() < 0.001, "Single-axis offset has no omitted cross-axis products")
 
 	# The main field force is applied at the fixed hull datum, so this shifted
 	# COM creates a real moment. Gravity itself acts through the COM and is not
@@ -81,6 +97,9 @@ func _run_tests() -> void:
 	_expect_near(custom_com.y, -0.125, 0.01, "Custom COM Y is -0.125m")
 	_expect_near(custom_com.z, 0.75, 0.01, "Custom COM Z is 0.75m")
 	_expect_near_vector(ship.center_of_mass, custom_com, 0.001, "Custom COM is written to the RigidBody3D")
+	var custom_products: Vector3 = cargo.get_telemetry()["inertia_products_kg_m2"]
+	_expect(custom_products.length() > 0.001, "Three-axis cargo offsets report the non-diagonal products the solver cannot represent")
+	_expect(ship.inertia.x > 0.0 and ship.inertia.y > 0.0 and ship.inertia.z > 0.0, "Combined inertia remains positive for a three-axis offset load")
 
 	# The subsystem must never exceed the parent ship's current payload rating.
 	cargo.set_cargo(99999.0, Vector3.ZERO, "OVERLOAD_TEST")

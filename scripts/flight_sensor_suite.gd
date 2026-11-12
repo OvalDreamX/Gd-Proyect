@@ -13,13 +13,17 @@ const CHANNEL_HEADING: StringName = &"heading"
 const CHANNEL_VELOCITY: StringName = &"velocity"
 const CHANNEL_ALTITUDE: StringName = &"altitude"
 
+@export_category("Environment")
+@export var planetary_reference_frame_path: NodePath = NodePath("../../PlanetaryReferenceFrame")
+
 @export_category("Navigation reference")
-## World-space north reference. A future planetary environment profile should
-## supply the local tangent north vector for the ship's current position.
+## Legacy world-space north fallback used only when no planetary frame exists.
 @export var reference_north_world: Vector3 = Vector3(0.0, 0.0, -1.0)
 
 var _ship: RigidBody3D
 var _atmosphere: Node
+var _gravity_body: Node
+var _planetary_reference_frame: PlanetaryReferenceFrame
 
 var _channel_available: Dictionary = {
 	CHANNEL_ATTITUDE: true,
@@ -32,6 +36,8 @@ var _channel_available: Dictionary = {
 func _enter_tree() -> void:
 	_ship = get_parent() as RigidBody3D
 	_atmosphere = get_node_or_null("../AtmosphericFlightModel")
+	_gravity_body = get_node_or_null("../PlanetaryGravityBody")
+	_planetary_reference_frame = get_node_or_null(planetary_reference_frame_path) as PlanetaryReferenceFrame
 
 
 func _ready() -> void:
@@ -62,35 +68,53 @@ func get_instrument_snapshot() -> Dictionary:
 	var ship_forward: Vector3 = (-ship_basis.z).normalized()
 	var ship_velocity: Vector3 = _ship.linear_velocity
 	var local_up: Vector3 = Vector3.UP
+	var north_reference: Vector3 = reference_north_world
 	var altitude_m: float = _ship.global_position.y
+	var gravity_world: Vector3 = _ship.get_gravity()
+	var frame_available: bool = false
+
+	if is_instance_valid(_planetary_reference_frame):
+		var local_frame: Dictionary = _planetary_reference_frame.get_local_frame(_ship.global_position)
+		local_up = local_frame.get("up_world", Vector3.UP)
+		north_reference = local_frame.get("north_world", reference_north_world)
+		altitude_m = float(local_frame.get("altitude_m", altitude_m))
+		gravity_world = local_frame.get("gravity_world", gravity_world)
+		frame_available = true
+	elif _gravity_body != null and _gravity_body.has_method("get_local_gravity_vector_world"):
+		gravity_world = _gravity_body.call("get_local_gravity_vector_world")
+
 	var atmosphere_density: float = 0.0
 	var atmosphere_relative_velocity: Vector3 = ship_velocity
 	var atmosphere_airspeed: float = ship_velocity.length()
 	var atmosphere_available: bool = false
-
 	if is_instance_valid(_atmosphere) and _atmosphere.has_method("get_telemetry"):
 		var atmosphere_data: Dictionary = _atmosphere.call("get_telemetry")
-		local_up = atmosphere_data.get("atmosphere_up_world", local_up)
-		if local_up.length_squared() > 0.000001:
-			local_up = local_up.normalized()
-		else:
-			local_up = Vector3.UP
-		altitude_m = float(atmosphere_data.get("atmosphere_altitude_m", _ship.global_position.dot(local_up)))
+		if not frame_available:
+			local_up = atmosphere_data.get("atmosphere_up_world", local_up)
+			if local_up.length_squared() > 0.000001:
+				local_up = local_up.normalized()
+			else:
+				local_up = Vector3.UP
+			altitude_m = float(atmosphere_data.get("atmosphere_altitude_m", _ship.global_position.dot(local_up)))
+			north_reference = atmosphere_data.get("atmosphere_north_world", north_reference)
 		atmosphere_density = float(atmosphere_data.get("atmosphere_density_kg_m3", 0.0))
 		atmosphere_relative_velocity = atmosphere_data.get("atmosphere_relative_velocity_world", ship_velocity)
 		atmosphere_airspeed = float(atmosphere_data.get("atmosphere_airspeed_mps", atmosphere_relative_velocity.length()))
 		atmosphere_available = bool(atmosphere_data.get("atmosphere_enabled", false))
-	else:
-		var gravity: Vector3 = _ship.get_gravity()
-		if gravity.length_squared() > 0.000001:
-			local_up = -gravity.normalized()
+	elif gravity_world.length_squared() > 0.000001:
+		local_up = -gravity_world.normalized()
 		altitude_m = _ship.global_position.dot(local_up)
+
+	if local_up.length_squared() > 0.000001:
+		local_up = local_up.normalized()
+	else:
+		local_up = Vector3.UP
 
 	var attitude: Dictionary = calculate_attitude_angles(ship_basis, local_up)
 	var heading: Dictionary = calculate_heading_degrees(
 		ship_forward,
 		local_up,
-		reference_north_world
+		north_reference
 	)
 
 	var in_atmosphere: bool = atmosphere_available and atmosphere_density > 0.00001
@@ -108,6 +132,8 @@ func get_instrument_snapshot() -> Dictionary:
 		"instrument_heading_degrees": float(heading.get("heading_degrees", 0.0)),
 		"instrument_heading_valid": channel_heading,
 		"instrument_local_up_world": local_up,
+		"instrument_north_reference_world": north_reference,
+		"instrument_gravity_world": gravity_world,
 		"instrument_north_world": heading.get("north_world", Vector3.ZERO),
 		"instrument_air_relative_velocity_world": measured_flight_velocity,
 		"instrument_inertial_velocity_world": ship_velocity,

@@ -85,6 +85,10 @@ func _run_tests() -> void:
 	var displayed_telemetry: Dictionary = flight_display.get("_telemetry")
 	_expect(is_equal_approx(float(displayed_telemetry.get("field_power_output", -1.0)), 0.65), "HUD receives actual field output for the live gauge")
 	_expect(is_equal_approx(float(displayed_telemetry.get("field_power_command", -1.0)), 0.8), "HUD receives the separate field-power setpoint")
+	var letterbox_offset: Vector2 = HUD_OVERLAY_SCRIPT.calculate_letterbox_offset(Vector2(1920.0, 1080.0), 1.35)
+	_expect(is_equal_approx(letterbox_offset.x, 96.0) and is_equal_approx(letterbox_offset.y, 54.0), "HUD letterbox translation is expressed in viewport pixels after scaling")
+	_expect(HUD_OVERLAY_SCRIPT.heading_label_degrees(359.6) == 0, "HUD heading wraps rounded 360 degrees to 000")
+	_expect(HUD_OVERLAY_SCRIPT.heading_label_degrees(-0.6) == 359, "HUD heading wraps negative values into 000–359")
 
 	var debug_telemetry: Dictionary = sample_telemetry.duplicate(true)
 	debug_telemetry["debug_overview_enabled"] = true

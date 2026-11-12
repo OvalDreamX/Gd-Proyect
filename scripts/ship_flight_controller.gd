@@ -44,6 +44,7 @@ const COCKPIT_RECENTER_DELAY_SECONDS: float = 3.0
 @onready var _atmospheric_flight_model: AtmosphericFlightModel = get_node_or_null("../AtmosphericFlightModel") as AtmosphericFlightModel
 @onready var _flight_sensor_suite: FlightSensorSuite = get_node_or_null("../FlightSensorSuite") as FlightSensorSuite
 @onready var _cargo_system: Node = get_node_or_null("../CargoSystem")
+@onready var _planetary_gravity_body: Node = get_node_or_null("../PlanetaryGravityBody")
 
 var _hud: FlightHUD
 var _field_state: int = FieldState.OFF
@@ -481,7 +482,7 @@ func _publish_telemetry() -> void:
 		"ship_angular_velocity": _ship.angular_velocity,
 		"ship_global_basis": _ship.global_basis,
 		"view_camera_global_basis": _camera_controller.get_active_camera_global_basis(),
-		"ship_gravity_world": _ship.get_gravity(),
+		"ship_gravity_world": _planetary_gravity_body.call("get_local_gravity_vector_world") if is_instance_valid(_planetary_gravity_body) else _ship.get_gravity(),
 		"ship_is_sleeping": _ship.sleeping,
 		"center_of_mass_mode": "AUTO" if _ship.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_AUTO else "CUSTOM",
 		"rigid_body_frozen": _ship.freeze,

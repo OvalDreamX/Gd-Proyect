@@ -50,6 +50,7 @@ const DEBUG_REFRESH_EVERY_CALLS: int = 3
 @onready var _ship: ShipInteractable = get_parent() as ShipInteractable
 @onready var _vane_controller: VaneController = get_node("../VaneController") as VaneController
 @onready var _force_debug: ForceVectorDebug = get_node_or_null("../ForceVectorDebug") as ForceVectorDebug
+@onready var _planetary_gravity_body: Node = get_node_or_null("../PlanetaryGravityBody")
 
 var _debug_visualization_enabled: bool = false
 var _debug_refresh_counter: int = 0
@@ -130,7 +131,7 @@ func apply_flight_control_forces(
 
 	var body_basis: Basis = _ship.global_basis.orthonormalized()
 	var center_of_mass_world: Vector3 = _ship.global_transform * _ship.center_of_mass
-	_last_gravity_magnitude = _ship.get_gravity().length()
+	_last_gravity_magnitude = _get_gravity_vector_world().length()
 	var reference_force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
 	var main_vector_force_scale: float = reference_force_newtons_per_twr * _last_power_output
 	# Maneuvering remains available whenever the field is ONLINE. Reducing the
@@ -146,7 +147,7 @@ func apply_flight_control_forces(
 	_apply_yaw_pair(body_basis, maneuver_force_scale, _last_vane_redistribution_fraction, _last_maximum_vane_output_multiplier)
 
 	if _last_gravity_magnitude > 0.0001:
-		var local_up: Vector3 = -_ship.get_gravity().normalized()
+		var local_up: Vector3 = -_get_gravity_vector_world().normalized()
 		_last_vertical_twr = maxf(_last_total_force.dot(local_up), 0.0) / (_ship.mass * _last_gravity_magnitude)
 
 	# Thermal load combines the current main-vector allocation with the actual
@@ -388,6 +389,12 @@ func _get_bottom_effective_authority_twr() -> float:
 	)
 
 
+func _get_gravity_vector_world() -> Vector3:
+	if is_instance_valid(_planetary_gravity_body) and _planetary_gravity_body.has_method("get_local_gravity_vector_world"):
+		return _planetary_gravity_body.call("get_local_gravity_vector_world")
+	return _ship.get_gravity() if is_instance_valid(_ship) else Vector3.ZERO
+
+
 func _get_rated_gross_mass_kg() -> float:
 	if not is_instance_valid(_ship):
 		return 0.0
@@ -401,7 +408,7 @@ func is_field_online() -> bool:
 func _get_maximum_lift_twr_at_current_mass() -> float:
 	if not is_instance_valid(_ship) or _ship.mass <= MINIMUM_MASS_KG:
 		return 0.0
-	var local_gravity_mps2: float = _ship.get_gravity().length()
+	var local_gravity_mps2: float = _get_gravity_vector_world().length()
 	if local_gravity_mps2 <= 0.0001:
 		return 0.0
 	var rated_lift_force: float = (
@@ -433,7 +440,7 @@ func _update_force_debug(force_refresh: bool = false) -> void:
 
 ## Read-only snapshot for HUD and tests. HUD never modifies simulation state.
 func get_telemetry() -> Dictionary:
-	var local_gravity_magnitude: float = _ship.get_gravity().length() if is_instance_valid(_ship) else 0.0
+	var local_gravity_magnitude: float = _get_gravity_vector_world().length() if is_instance_valid(_ship) else 0.0
 	var bottom_effective_twr: float = _get_bottom_effective_authority_twr()
 	var hover_power_percent: float = -1.0
 	var rated_gross_mass_kg: float = _get_rated_gross_mass_kg()

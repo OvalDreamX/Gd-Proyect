@@ -8,6 +8,8 @@ class_name PlayerController
 @export var ground_acceleration: float = 22.0
 @export var ground_friction: float = 18.0
 @export var jump_velocity: float = 4.5
+@export_category("Environment")
+@export var planetary_reference_frame_path: NodePath = NodePath("../PlanetaryReferenceFrame")
 @export_category("Look")
 @export_range(0.0005, 0.01, 0.0001) var mouse_sensitivity: float = 0.002
 @export_range(60.0, 89.0, 1.0) var vertical_look_limit_degrees: float = 85.0
@@ -19,6 +21,7 @@ var _nearby_ship: Node3D = null
 var _transitioning: bool = false
 var _piloting: bool = false
 var _gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+var _planetary_reference_frame: PlanetaryReferenceFrame
 
 var _hud_layer: CanvasLayer
 var _prompt_panel: PanelContainer
@@ -28,6 +31,7 @@ var _controls_label: Label
 
 func _ready() -> void:
 	add_to_group("player")
+	_planetary_reference_frame = get_node_or_null(planetary_reference_frame_path) as PlanetaryReferenceFrame
 	_build_hud()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -47,7 +51,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * mouse_sensitivity)
+		var local_up: Vector3 = _get_local_up_world()
+		global_basis = Basis(local_up, -event.relative.x * mouse_sensitivity) * global_basis
 		camera_pivot.rotate_x(-event.relative.y * mouse_sensitivity)
 		var limit_radians := deg_to_rad(vertical_look_limit_degrees)
 		camera_pivot.rotation.x = clampf(camera_pivot.rotation.x, -limit_radians, limit_radians)
@@ -61,25 +66,63 @@ func _physics_process(delta: float) -> void:
 	if _transitioning or _piloting:
 		return
 
-	if not is_on_floor():
-		velocity.y -= _gravity * delta
-	elif velocity.y < 0.0:
-		velocity.y = 0.0
+	var local_up: Vector3 = _get_local_up_world()
+	_align_to_local_frame(local_up)
+	up_direction = local_up
+	var gravity_world: Vector3 = (
+		_planetary_reference_frame.get_gravity_vector_world(global_position)
+		if is_instance_valid(_planetary_reference_frame)
+		else Vector3.DOWN * _gravity
+	)
+
+	if is_on_floor():
+		var down_speed: float = velocity.dot(local_up)
+		if down_speed < 0.0:
+			velocity -= local_up * down_speed
+	else:
+		velocity += gravity_world * delta
 
 	if Input.is_action_just_pressed("jump") and is_on_floor():
-		velocity.y = jump_velocity
+		velocity += local_up * jump_velocity
 	var input_vector := Input.get_vector(
 		"move_left", "move_right", "move_forward", "move_backward"
 	)
-	var wish_direction := (global_basis * Vector3(input_vector.x, 0.0, input_vector.y)).normalized()
+	var wish_direction := global_basis * Vector3(input_vector.x, 0.0, input_vector.y)
+	wish_direction -= local_up * wish_direction.dot(local_up)
 	if wish_direction.length_squared() > 0.0001:
-		velocity.x = move_toward(velocity.x, wish_direction.x * walk_speed, ground_acceleration * delta)
-		velocity.z = move_toward(velocity.z, wish_direction.z * walk_speed, ground_acceleration * delta)
+		wish_direction = wish_direction.normalized() * walk_speed
+		var velocity_up: Vector3 = local_up * velocity.dot(local_up)
+		var velocity_tangent: Vector3 = velocity - velocity_up
+		velocity_tangent = velocity_tangent.move_toward(wish_direction, ground_acceleration * delta)
+		velocity = velocity_tangent + velocity_up
 	else:
-		velocity.x = move_toward(velocity.x, 0.0, ground_friction * delta)
-		velocity.z = move_toward(velocity.z, 0.0, ground_friction * delta)
+		var vertical_velocity: Vector3 = local_up * velocity.dot(local_up)
+		var tangent_velocity: Vector3 = velocity - vertical_velocity
+		tangent_velocity = tangent_velocity.move_toward(Vector3.ZERO, ground_friction * delta)
+		velocity = tangent_velocity + vertical_velocity
 
 	move_and_slide()
+
+
+func _get_local_up_world() -> Vector3:
+	if is_instance_valid(_planetary_reference_frame):
+		var frame: Dictionary = _planetary_reference_frame.get_local_frame(global_position)
+		var frame_up: Vector3 = frame.get("up_world", Vector3.UP)
+		return frame_up.normalized() if frame_up.length_squared() > 0.000001 else Vector3.UP
+	return Vector3.UP
+
+
+func _align_to_local_frame(local_up: Vector3) -> void:
+	if not is_instance_valid(_planetary_reference_frame):
+		return
+	var forward: Vector3 = -global_basis.z
+	forward -= local_up * forward.dot(local_up)
+	if forward.length_squared() <= 0.000001:
+		var frame: Dictionary = _planetary_reference_frame.get_local_frame(global_position)
+		forward = frame.get("north_world", Vector3(0.0, 0.0, -1.0))
+	forward = forward.normalized()
+	var right: Vector3 = forward.cross(local_up).normalized()
+	global_basis = Basis(right, local_up, -forward).orthonormalized()
 
 
 ## Called by the ship's proximity Area3D when the player enters interaction range.

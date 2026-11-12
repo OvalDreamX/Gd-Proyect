@@ -124,7 +124,7 @@ func _draw() -> void:
 	var scale_factor: float = fit_scale * clampf(ui_scale, 0.8, 1.0) * HUD_CONTENT_SCALE
 	var logical_size: Vector2 = size / maxf(scale_factor, 0.001)
 	var extra_space: Vector2 = logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)
-	var draw_offset := extra_space * 0.5
+	var draw_offset: Vector2 = calculate_letterbox_offset(size, scale_factor)
 	draw_set_transform(draw_offset, 0.0, Vector2.ONE * scale_factor)
 
 	var font: Font = ThemeDB.fallback_font
@@ -287,6 +287,15 @@ func _draw_corner_frame() -> void:
 	draw_line(corners[3], corners[3] - Vector2(0, arm), frame_color, 0.7)
 
 
+static func calculate_letterbox_offset(control_size: Vector2, scale_factor: float) -> Vector2:
+	# CanvasItem draw transforms apply scale after translation. Convert the
+	# logical letterbox margin back to viewport pixels before setting origin.
+	var safe_scale: float = maxf(scale_factor, 0.001)
+	var logical_size: Vector2 = control_size / safe_scale
+	var logical_margin: Vector2 = (logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)) * 0.5
+	return logical_margin * safe_scale
+
+
 static func heading_label_degrees(heading_degrees: float, offset_degrees: float = 0.0) -> int:
 	# Normalize after rounding as well: 359.6° must display as 000°, not 360°.
 	return int(round(fposmod(heading_degrees + offset_degrees, 360.0))) % 360
@@ -343,7 +352,7 @@ func _draw_flight_data(
 	_draw_data_block(font, Vector2(892.0, 230.0), "LOCAL ALT", String.num(local_altitude, 1) if altitude_valid else "---", "m")
 	_draw_data_block(font, Vector2(278.0, 466.0), "VERT SPEED", "%+.1f" % local_vertical_speed if velocity_valid else "---", "m/s")
 	_draw_data_block(font, Vector2(892.0, 466.0), "ATTITUDE", "%+.1f / %+.1f" % [pitch_degrees, roll_degrees] if attitude_valid else "--- / ---", "PITCH / BANK")
-	var heading_text: String = "HDG %03d°" % int(round(heading_degrees)) if heading_valid else "HDG ---"
+	var heading_text: String = "HDG %03d°" % heading_label_degrees(heading_degrees) if heading_valid else "HDG ---"
 	_draw_text(font, Vector2(570.0, 493.0), heading_text, 11, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 140.0)
 
 

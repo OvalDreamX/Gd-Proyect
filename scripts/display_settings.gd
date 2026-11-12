@@ -69,10 +69,9 @@ func get_windowed_resolution_options() -> Array[Vector2i]:
 			options.append(preset)
 
 	if options.is_empty():
-		options.append(Vector2i(
-			maxi(available_size.x, 640),
-			maxi(available_size.y, 360)
-		))
+		# The project enforces MIN_WINDOW_SIZE. If the monitor is smaller than
+		# that minimum, retain the minimum rather than offering an impossible size.
+		options.append(MIN_WINDOW_SIZE)
 
 	if not options.has(_windowed_resolution):
 		var current_window_size: Vector2i = DisplayServer.window_get_size()
@@ -148,15 +147,11 @@ func _sanitize_windowed_resolution(requested: Vector2i) -> Vector2i:
 	if available_size.x <= 0 or available_size.y <= 0:
 		available_size = get_desktop_resolution()
 
-	if requested.x < MIN_WINDOW_SIZE.x or requested.y < MIN_WINDOW_SIZE.y:
-		return DEFAULT_WINDOW_SIZE
-	if requested.x > available_size.x or requested.y > available_size.y:
-		var fitting: Vector2i = MIN_WINDOW_SIZE
-		for preset: Vector2i in WINDOWED_PRESETS:
-			if preset.x <= available_size.x and preset.y <= available_size.y:
-				if preset.x * preset.y > fitting.x * fitting.y:
-					fitting = preset
-		return fitting
+	if (
+		requested.x < MIN_WINDOW_SIZE.x or requested.y < MIN_WINDOW_SIZE.y
+		or requested.x > available_size.x or requested.y > available_size.y
+	):
+		return best_fitting_windowed_resolution(available_size)
 	return requested
 
 
@@ -164,6 +159,19 @@ func _resolution_comes_first(a: Vector2i, b: Vector2i) -> bool:
 	if a.x == b.x:
 		return a.y < b.y
 	return a.x < b.x
+
+
+static func best_fitting_windowed_resolution(available_size: Vector2i) -> Vector2i:
+	var best_fit: Vector2i = Vector2i.ZERO
+	var best_area: int = -1
+	for preset: Vector2i in WINDOWED_PRESETS:
+		if preset.x <= available_size.x and preset.y <= available_size.y:
+			var preset_area: int = preset.x * preset.y
+			if preset_area > best_area:
+				best_fit = preset
+				best_area = preset_area
+	# If no preset fits, preserve the explicit 800×450 minimum-window contract.
+	return MIN_WINDOW_SIZE if best_fit == Vector2i.ZERO else best_fit
 
 
 static func normalize_mode(value: String) -> String:

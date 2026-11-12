@@ -1,0 +1,24 @@
+SPACE TRUCKER STABILITY PASS 3 CLEANUP
+======================================
+
+No existing project files need to be deleted.
+
+Overwrite:
+- scripts/cargo_system.gd
+- scripts/atmospheric_flight_model.gd
+- scripts/flight_sensor_suite.gd
+- scripts/repulsorlift_system.gd
+- scripts/ship_flight_controller.gd
+- scripts/player_controller.gd
+- scenes/ship.tscn
+- scenes/test_range.tscn
+- tests/cargo_system_test.gd
+
+Add:
+- scripts/planetary_reference_frame.gd
+- scripts/planetary_gravity_body.gd
+- tests/planetary_reference_frame_test.gd
+- docs/STABILITY_PASS_3_NOTES.md
+- STABILITY_PASS_3_README.md
+
+Keep all existing .gd.uid sidecars. No existing files are removed.

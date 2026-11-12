@@ -4,12 +4,16 @@ class_name AtmosphericFlightModel
 ## Applies atmospheric drag and shield-generated lifting-body force as
 ## independent environmental effects. Both use the same air-density and
 ## air-relative-velocity sample, so wind cannot diverge between subsystems.
-## Wind is fixed in world space (the test ship initially faces -Z).
+## PlanetaryReferenceFrame supplies the local tangent frame and gravity.
+## Standalone bodies retain the original world-space fallback.
+
+@export_category("Environment")
+@export var planetary_reference_frame_path: NodePath = NodePath("../../PlanetaryReferenceFrame")
 
 @export_category("Atmosphere")
 @export var atmosphere_enabled: bool = true
-## World-space point defining zero altitude for the local atmosphere.
-## The test range uses the ground plane at world Y = 0.
+## Legacy world-space zero-altitude point used only without a planetary frame.
+## The test range uses its shared frame with the origin on the ground plane.
 @export var atmosphere_reference_position_world: Vector3 = Vector3.ZERO
 @export_range(0.0, 2.0, 0.001) var sea_level_density_kg_m3: float = 1.225
 @export_range(100.0, 50000.0, 100.0) var density_scale_height_m: float = 8500.0
@@ -19,10 +23,11 @@ class_name AtmosphericFlightModel
 @export var ambient_temperature_celsius: float = -10.0
 
 @export_category("Test-range wind")
-## Mean wind direction is from the ship's front-left toward its rear-right
-## at the initial test-range heading (-Z). This is world-space wind velocity,
-## not the direction the wind comes from.
+## Legacy world-space fallback used only when no PlanetaryReferenceFrame exists.
 @export var atmosphere_velocity_world: Vector3 = Vector3(5.0, 0.0, 6.25)
+## Shared local frame components: X=east, Y=up, Z=north. The default reproduces
+## the test range flow of +X and +Z in world coordinates.
+@export var mean_wind_velocity_local_mps: Vector3 = Vector3(5.0, 0.0, -6.25)
 @export var wind_turbulence_enabled: bool = true
 @export_range(0.0, 3.0, 0.05) var wind_turbulence_amplitude_mps: float = 1.1
 @export_range(0.01, 1.0, 0.01) var wind_turbulence_frequency: float = 0.18
@@ -56,11 +61,16 @@ const TURBULENCE_AXIS_SCALE := Vector3(0.7, 0.25, 0.7)
 
 @onready var _ship: RigidBody3D = get_parent() as RigidBody3D
 
+var _planetary_reference_frame: PlanetaryReferenceFrame
 var _wind_noise: FastNoiseLite
 var _wind_elapsed_seconds: float = 0.0
 var _last_altitude_m: float = 0.0
 var _last_up_world: Vector3 = Vector3.UP
+var _last_north_world: Vector3 = Vector3(0.0, 0.0, -1.0)
+var _last_east_world: Vector3 = Vector3.RIGHT
+var _last_gravity_world: Vector3 = Vector3.DOWN * 9.81
 var _last_density_kg_m3: float = 0.0
+var _last_mean_wind_velocity_world: Vector3 = Vector3.ZERO
 var _last_wind_velocity_world: Vector3 = Vector3.ZERO
 var _last_turbulence_velocity_world: Vector3 = Vector3.ZERO
 var _last_relative_air_velocity_world: Vector3 = Vector3.ZERO
@@ -81,6 +91,8 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 
+	_planetary_reference_frame = get_node_or_null(planetary_reference_frame_path) as PlanetaryReferenceFrame
+
 	_wind_noise = FastNoiseLite.new()
 	_wind_noise.seed = WIND_NOISE_SEED
 	_wind_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -97,18 +109,27 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_wind_elapsed_seconds += maxf(delta, 0.0)
-	_update_wind_sample()
-
+	var environment_frame: Dictionary = {}
 	var gravity_world: Vector3 = _ship.get_gravity()
-	var up_world: Vector3 = -gravity_world.normalized() if gravity_world.length_squared() > 0.000001 else Vector3.UP
-	_last_up_world = up_world
-	# The body origin is the altitude reference for this low-altitude prototype.
-	# It avoids reading RigidBody3D.center_of_mass in AUTO mode, where that
-	# property does not expose the solver's computed center of mass.
-	_last_altitude_m = maxf(
-		(_ship.global_position - atmosphere_reference_position_world).dot(up_world),
-		0.0
-	)
+	if is_instance_valid(_planetary_reference_frame):
+		environment_frame = _planetary_reference_frame.get_local_frame(_ship.global_position)
+		gravity_world = environment_frame.get("gravity_world", gravity_world)
+		_last_up_world = environment_frame.get("up_world", Vector3.UP)
+		_last_north_world = environment_frame.get("north_world", Vector3(0.0, 0.0, -1.0))
+		_last_east_world = environment_frame.get("east_world", Vector3.RIGHT)
+		_last_altitude_m = maxf(float(environment_frame.get("altitude_m", 0.0)), 0.0)
+	else:
+		var up_world: Vector3 = -gravity_world.normalized() if gravity_world.length_squared() > 0.000001 else Vector3.UP
+		_last_up_world = up_world
+		_last_north_world = Vector3(0.0, 0.0, -1.0)
+		_last_east_world = Vector3.RIGHT
+		# The legacy fallback uses the body origin as its zero-altitude datum.
+		_last_altitude_m = maxf(
+			(_ship.global_position - atmosphere_reference_position_world).dot(up_world),
+			0.0
+		)
+	_last_gravity_world = gravity_world
+	_update_wind_sample(environment_frame)
 	_last_relative_air_velocity_world = _ship.linear_velocity - _last_wind_velocity_world
 	_last_airspeed_mps = _last_relative_air_velocity_world.length()
 
@@ -170,8 +191,9 @@ func _physics_process(delta: float) -> void:
 		_ship.apply_central_force(_last_lift_force_world)
 
 
-func _update_wind_sample() -> void:
+func _update_wind_sample(environment_frame: Dictionary) -> void:
 	_last_turbulence_velocity_world = Vector3.ZERO
+	var turbulence_local := Vector3.ZERO
 	if wind_turbulence_enabled and wind_turbulence_amplitude_mps > 0.0 and _wind_noise != null:
 		# Three separated samples of one seeded coherent-noise field give smooth,
 		# deterministic gust variation without frame-to-frame random impulses.
@@ -181,18 +203,32 @@ func _update_wind_sample() -> void:
 			_wind_noise.get_noise_1d(time_sample + 37.1),
 			_wind_noise.get_noise_1d(time_sample + 83.7)
 		)
-		_last_turbulence_velocity_world = Vector3(
+		turbulence_local = Vector3(
 			noise_sample.x * TURBULENCE_AXIS_SCALE.x,
 			noise_sample.y * TURBULENCE_AXIS_SCALE.y,
 			noise_sample.z * TURBULENCE_AXIS_SCALE.z
 		) * wind_turbulence_amplitude_mps
-	_last_wind_velocity_world = atmosphere_velocity_world + _last_turbulence_velocity_world
+
+	if is_instance_valid(_planetary_reference_frame) and not environment_frame.is_empty():
+		var east: Vector3 = environment_frame.get("east_world", Vector3.RIGHT)
+		var up: Vector3 = environment_frame.get("up_world", Vector3.UP)
+		var north: Vector3 = environment_frame.get("north_world", Vector3(0.0, 0.0, -1.0))
+		_last_mean_wind_velocity_world = east * mean_wind_velocity_local_mps.x + up * mean_wind_velocity_local_mps.y + north * mean_wind_velocity_local_mps.z
+		_last_turbulence_velocity_world = east * turbulence_local.x + up * turbulence_local.y + north * turbulence_local.z
+	else:
+		_last_mean_wind_velocity_world = atmosphere_velocity_world
+		_last_turbulence_velocity_world = turbulence_local
+	_last_wind_velocity_world = _last_mean_wind_velocity_world + _last_turbulence_velocity_world
 
 
 func _reset_frame_telemetry() -> void:
 	_last_altitude_m = 0.0
 	_last_up_world = Vector3.UP
+	_last_north_world = Vector3(0.0, 0.0, -1.0)
+	_last_east_world = Vector3.RIGHT
+	_last_gravity_world = Vector3.DOWN * 9.81
 	_last_density_kg_m3 = 0.0
+	_last_mean_wind_velocity_world = Vector3.ZERO
 	_last_wind_velocity_world = Vector3.ZERO
 	_last_turbulence_velocity_world = Vector3.ZERO
 	_last_relative_air_velocity_world = Vector3.ZERO
@@ -377,9 +413,13 @@ func get_telemetry() -> Dictionary:
 		"atmosphere_temperature_celsius": ambient_temperature_celsius,
 		"atmosphere_altitude_m": _last_altitude_m,
 		"atmosphere_up_world": _last_up_world,
+		"atmosphere_north_world": _last_north_world,
+		"atmosphere_east_world": _last_east_world,
+		"atmosphere_gravity_world": _last_gravity_world,
 		"atmosphere_density_kg_m3": _last_density_kg_m3,
 		"atmosphere_velocity_world": _last_wind_velocity_world,
-		"atmosphere_mean_wind_velocity_world": atmosphere_velocity_world,
+		"atmosphere_mean_wind_velocity_world": _last_mean_wind_velocity_world,
+		"atmosphere_mean_wind_velocity_local_mps": mean_wind_velocity_local_mps,
 		"atmosphere_turbulence_velocity_world": _last_turbulence_velocity_world,
 		"atmosphere_relative_velocity_world": _last_relative_air_velocity_world,
 		"atmosphere_airspeed_mps": _last_airspeed_mps,

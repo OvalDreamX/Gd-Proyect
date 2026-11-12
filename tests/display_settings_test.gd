@@ -43,6 +43,14 @@ func _run_tests() -> void:
 		DISPLAY_SETTINGS_SCRIPT.format_resolution(Vector2i(1920, 1080)) == "1920 × 1080",
 		"Resolution labels are formatted consistently"
 	)
+	_expect(
+		DISPLAY_SETTINGS_SCRIPT.best_fitting_windowed_resolution(Vector2i(1024, 768)) == Vector2i(1024, 576),
+		"Invalid saved resolution falls back to the largest supported preset that fits"
+	)
+	_expect(
+		DISPLAY_SETTINGS_SCRIPT.best_fitting_windowed_resolution(Vector2i(640, 480)) == Vector2i(800, 450),
+		"Displays below the minimum retain the explicit minimum-window constraint"
+	)
 
 	print("Display settings tests: %d checks, %d failures." % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
