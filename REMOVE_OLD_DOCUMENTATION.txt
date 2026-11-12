@@ -1,0 +1,44 @@
+DOCUMENTATION CLEANUP — FILES TO REMOVE AFTER OVERWRITING
+
+The overwrite ZIP cannot delete existing files. After copying the new/updated docs into the project, delete these superseded or merged files manually from the repository:
+
+Root-level phase/install notes:
+- INSTALL_2F_CONTROL_CORRECTION.md
+- INSTALL_PHASE_2A.md
+- INSTALL_PHASE_2B.md
+- INSTALL_PHASE_2C.md
+- INSTALL_PHASE_2D.md
+- INSTALL_PHASE_2E.md
+- INSTALL_PHASE_2F.md
+- INSTALL_PHASE_2G_FCC.md
+- INSTALL_PHASE_2H_COCKPIT_HUD.md
+- INSTALL_PHASE_2I_DISPLAY_SCALABILITY.md
+- INSTALL_PHASE_2J_ATMOSPHERIC_FLIGHT.md
+- INSTALL_PHASE_2K_WIND_INPUT_RESPONSE.md
+- INSTALL_PHASE_2L_SHIELD_GLIDE_LIFT.md
+- INSTALL_PHASE_2M_VISUAL_FLIGHT_REFERENCES.md
+- INSTALL_PHASE_2N_FLIGHT_HUD_FCC_CORRECTIONS.md
+- INSTALL_PHASE_2O_WINDSHIELD_HUD.md
+- INSTALL_PHASE_2Q_HUD_RECENTER.md
+- INSTALL_PHASE_2Q_WINDSHIELD_RENDER_FIX.md
+- INSTALL_PHASE_2R_FPM_SENSORS.md
+- INSTALL_PHASE_2S_THERMAL_MODEL.md
+- INSTALL_PHASE_2T_CARGO_SYSTEM.md
+- INSTALL_PHASE_2U_POLISH.md
+- PHASE_2A_DESIGN_NOTES.md
+
+Superseded/merged docs under docs/:
+- docs/DEVELOPMENT_CHANGELOG.md (merged into IMPLEMENTATION_HISTORY.md)
+- docs/QA_NOTES.md (replaced by TESTING.md; its Phase 2Q SubViewport checklist is historical)
+- docs/Prompt.txt (workflow guidance merged into AI_HANDOFF.md)
+- docs/README.txt (duplicate of Prompt.txt)
+- docs/GDD_ANNEX_Modeling.md (proposal merged, and explicitly downgraded to unapproved, in FUTURE_PHASES.md)
+- docs/Space_Trucker_Game_Design_Document_v0_1.md (older duplicate Markdown GDD; GAME_DESIGN_DOCUMENT_v0_1.md is canonical)
+
+Keep these files:
+- docs/GAME_DESIGN_DOCUMENT_v0_1.md — canonical GDD; do not change until the owner approves the proposed amendments.
+- docs/GDD_ANNEX_v0_3.md — detailed Phase 3 specification; not a duplicate of the phase-history document.
+- docs/Space_Trucker_Game_Design_Document_v0_1.docx and .pdf — left untouched because their exact contents were not independently inspected in this cleanup. Treat them as archival exports, not sources of truth. They can be removed after comparing/confirming they are obsolete.
+- Project source, scenes, Resources, tests, images and UID files — this is a documentation-only pass.
+
+Do not delete the canonical GDD or the detailed Phase 3 annex. No GDD design edits are included in this pass.

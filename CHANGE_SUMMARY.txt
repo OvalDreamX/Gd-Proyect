@@ -1,0 +1,16 @@
+DOCUMENTATION CLEANUP — SUMMARY
+
+New:
+- docs/IMPLEMENTATION_HISTORY.md: one chronological implementation record for Phases 2A–2U, with superseded behavior and current file map.
+- docs/TESTING.md: current test inventory, PowerShell commands, manual regression checklist and validation policy.
+- docs/FUTURE_PHASES.md: Phase 3 roadmap pointer plus consolidated graphics/cockpit/modelling direction; unapproved proposals are clearly labelled.
+
+Replaced:
+- README.md: project overview and documentation map.
+- docs/AI_HANDOFF.md: concise current baseline, architecture, constraints and next approved direction.
+
+Intentionally not edited:
+- docs/GAME_DESIGN_DOCUMENT_v0_1.md. The GDD was reviewed, but proposed design updates are being presented separately for owner approval.
+- docs/GDD_ANNEX_v0_3.md. It remains the detailed Phase 3 specification.
+
+No scripts, scenes, tests, Resources, project settings or game behavior are changed.
