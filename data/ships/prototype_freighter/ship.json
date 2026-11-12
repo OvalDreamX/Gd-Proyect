@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "id": "spacetrucker.prototype_freighter",
+  "display_name": "Prototype Freighter",
+  "model": "model.glb",
+  "identity": {
+    "manufacturer": "Space Trucker Test Range",
+    "class": "Light freighter",
+    "description": "Reference configuration matching the current prototype ship."
+  },
+  "physics": {
+    "dry_mass_kg": 30000.0,
+    "dry_center_of_mass_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "dry_hull_dimensions_m": [
+      3.6,
+      1.5,
+      5.2
+    ],
+    "max_payload_mass_kg": 25000.0,
+    "collision_shape": {
+      "type": "box",
+      "size_m": [
+        3.6,
+        1.5,
+        5.2
+      ],
+      "position_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "cargo": {
+    "hold_min_m": [
+      -4.0,
+      -1.0,
+      -6.0
+    ],
+    "hold_max_m": [
+      4.0,
+      1.0,
+      6.0
+    ],
+    "payload_distribution_dimensions_m": [
+      2.0,
+      1.0,
+      3.0
+    ],
+    "presets": {
+      "PORT_HEAVY": {
+        "mass_kg": 20000.0,
+        "offset_m": [
+          -3.0,
+          0.0,
+          0.0
+        ]
+      },
+      "STARBOARD_HEAVY": {
+        "mass_kg": 20000.0,
+        "offset_m": [
+          3.0,
+          0.0,
+          0.0
+        ]
+      },
+      "NOSE_HEAVY": {
+        "mass_kg": 20000.0,
+        "offset_m": [
+          0.0,
+          0.0,
+          -4.0
+        ]
+      },
+      "AFT_HEAVY": {
+        "mass_kg": 20000.0,
+        "offset_m": [
+          0.0,
+          0.0,
+          4.0
+        ]
+      }
+    }
+  },
+  "propulsion": {
+    "reference_gravity_mps2": 9.81,
+    "maneuver_authority_fraction": 0.05,
+    "maneuver_boost_at_zero_main_power": 0.2,
+    "control_sets": {
+      "pitch_front": {
+        "member_type": "vane_ids",
+        "members": [
+          "bottom_front_left",
+          "bottom_front_right"
+        ]
+      },
+      "pitch_rear": {
+        "member_type": "vane_ids",
+        "members": [
+          "bottom_rear_left",
+          "bottom_rear_right"
+        ]
+      },
+      "roll_left": {
+        "member_type": "vane_ids",
+        "members": [
+          "bottom_front_left",
+          "bottom_rear_left"
+        ]
+      },
+      "roll_right": {
+        "member_type": "vane_ids",
+        "members": [
+          "bottom_front_right",
+          "bottom_rear_right"
+        ]
+      },
+      "yaw_left": {
+        "member_type": "group_ids",
+        "members": [
+          "side_left"
+        ]
+      },
+      "yaw_right": {
+        "member_type": "group_ids",
+        "members": [
+          "side_right"
+        ]
+      }
+    },
+    "vanes": [
+      {
+        "id": "bottom_front_left",
+        "display_name": "Bottom Front Left",
+        "anchor": "Vane_bottom_front_left",
+        "group": "bottom_front",
+        "authority_twr": 0.275
+      },
+      {
+        "id": "bottom_front_right",
+        "display_name": "Bottom Front Right",
+        "anchor": "Vane_bottom_front_right",
+        "group": "bottom_front",
+        "authority_twr": 0.275
+      },
+      {
+        "id": "bottom_rear_left",
+        "display_name": "Bottom Rear Left",
+        "anchor": "Vane_bottom_rear_left",
+        "group": "bottom_rear",
+        "authority_twr": 0.275
+      },
+      {
+        "id": "bottom_rear_right",
+        "display_name": "Bottom Rear Right",
+        "anchor": "Vane_bottom_rear_right",
+        "group": "bottom_rear",
+        "authority_twr": 0.275
+      },
+      {
+        "id": "main_rear",
+        "display_name": "Main Rear Vane",
+        "anchor": "Vane_main_rear",
+        "group": "main_rear",
+        "authority_twr": 1.5
+      },
+      {
+        "id": "side_left",
+        "display_name": "Left Side Yaw Vane",
+        "anchor": "Vane_side_left",
+        "group": "side_left",
+        "authority_twr": 0.03
+      },
+      {
+        "id": "side_right",
+        "display_name": "Right Side Yaw Vane",
+        "anchor": "Vane_side_right",
+        "group": "side_right",
+        "authority_twr": 0.03
+      }
+    ],
+    "main_vector": {
+      "forward_group": "main_rear",
+      "lift_groups": [
+        "bottom_front",
+        "bottom_rear"
+      ]
+    }
+  },
+  "handling": {
+    "maximum_pitch_rate_degrees_per_second": 32.0,
+    "maximum_roll_rate_degrees_per_second": 32.0,
+    "maximum_yaw_rate_degrees_per_second": 24.0
+  },
+  "aerodynamics": {
+    "drag_coefficient": 0.8,
+    "reference_area_m2": 18.0,
+    "hull_dimensions_m": [
+      3.6,
+      1.5,
+      5.2
+    ],
+    "shield_glide_lift_enabled": true,
+    "shield_effective_lift_area_m2": 36.0,
+    "shield_lift_effectiveness": 1.0,
+    "shield_max_lift_coefficient": 1.1,
+    "shield_stall_angle_degrees": 20.0,
+    "lift_minimum_airspeed_mps": 5.0,
+    "lift_full_effective_airspeed_mps": 18.0
+  },
+  "ground_effect": {
+    "enabled": true,
+    "probe_anchors": [
+      "GroundProbe_front_left",
+      "GroundProbe_front_right",
+      "GroundProbe_rear_left",
+      "GroundProbe_rear_right"
+    ],
+    "footprint_width_m": 5.0,
+    "max_gain": 0.15
+  },
+  "cameras": {
+    "cockpit_anchor": "CockpitCamera",
+    "seat_anchor": "CockpitSeat",
+    "external_focus_offset_m": [
+      0.0,
+      0.45,
+      0.0
+    ],
+    "external_distance_m": 11.0
+  }
+}
