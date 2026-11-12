@@ -1,8 +1,8 @@
 extends RefCounted
 class_name ShipDefinitionLoader
 
-## Strict schema-v1 JSON parser. This phase only parses and validates definitions;
-## it does not instantiate ships or load models yet.
+## Strict schema-v1 JSON parser. Ground-effect settings are validated here so
+## malformed mod data cannot silently create unsafe or unstable force inputs.
 
 const SUPPORTED_SCHEMA_VERSION: int = 1
 const REQUIRED_TOP_LEVEL: PackedStringArray = ["schema_version", "id", "display_name", "model", "physics", "cargo", "propulsion"]
@@ -114,16 +114,57 @@ static func validate(data: Dictionary) -> PackedStringArray:
 			_validate_positive_number(vane_data, "authority_twr", "propulsion.vanes[%d]" % index, errors, false)
 
 	if data.has("ground_effect"):
-		var ground: Variant = data["ground_effect"]
-		if not (ground is Dictionary):
-			errors.append("ground_effect must be an object when provided.")
-		else:
-			_validate_positive_number(ground, "footprint_width_m", "ground_effect", errors, false)
-			if ground.has("max_gain"):
-				var gain: float = float(ground["max_gain"])
-				if gain < 0.0 or gain > 1.0:
-					errors.append("ground_effect.max_gain must be between 0 and 1.")
+		_validate_ground_effect(data["ground_effect"], errors)
 	return errors
+
+
+static func _validate_ground_effect(value: Variant, errors: PackedStringArray) -> void:
+	if not (value is Dictionary):
+		errors.append("ground_effect must be an object when provided.")
+		return
+	var ground: Dictionary = value
+	if ground.has("enabled") and not (ground["enabled"] is bool):
+		errors.append("ground_effect.enabled must be a boolean.")
+		return
+	if not bool(ground.get("enabled", false)):
+		return
+	_validate_positive_number(ground, "footprint_width_m", "ground_effect", errors, true)
+	if not ground.has("max_gain") or not (ground["max_gain"] is int or ground["max_gain"] is float):
+		errors.append("ground_effect.max_gain must be a number.")
+	else:
+		var gain: float = float(ground["max_gain"])
+		if not is_finite(gain) or gain < 0.0 or gain > 1.0:
+			errors.append("ground_effect.max_gain must be between 0 and 1.")
+	var anchors: Variant = ground.get("probe_anchors", null)
+	if not (anchors is Array) or anchors.size() < 3:
+		errors.append("ground_effect.probe_anchors must contain at least three anchor names when enabled.")
+	else:
+		var seen_anchors: Dictionary = {}
+		for index: int in range(anchors.size()):
+			if not (anchors[index] is String):
+				errors.append("ground_effect.probe_anchors[%d] must be a string." % index)
+				continue
+			var anchor_name: String = str(anchors[index]).strip_edges()
+			if anchor_name.is_empty():
+				errors.append("ground_effect.probe_anchors[%d] must not be empty." % index)
+			elif seen_anchors.has(anchor_name):
+				errors.append("ground_effect.probe_anchors contains duplicate name: %s" % anchor_name)
+			else:
+				seen_anchors[anchor_name] = true
+	_validate_positive_number(ground, "probe_ray_start_offset_m", "ground_effect", errors, false)
+	if ground.has("minimum_valid_probes"):
+		var minimum_probes: Variant = ground["minimum_valid_probes"]
+		if not (minimum_probes is int) or int(minimum_probes) < 1 or (anchors is Array and int(minimum_probes) > anchors.size()):
+			errors.append("ground_effect.minimum_valid_probes must be an integer between 1 and the number of probes.")
+	if ground.has("surface_normal_alignment_min"):
+		var alignment: Variant = ground["surface_normal_alignment_min"]
+		if not (alignment is int or alignment is float) or not is_finite(float(alignment)) or float(alignment) < 0.0 or float(alignment) > 1.0:
+			errors.append("ground_effect.surface_normal_alignment_min must be between 0 and 1.")
+	if ground.has("collision_mask"):
+		var mask: Variant = ground["collision_mask"]
+		if not (mask is int) or int(mask) < 1:
+			errors.append("ground_effect.collision_mask must be a positive integer.")
+
 
 static func _validate_positive_number(source: Dictionary, key: String, section: String, errors: PackedStringArray, strictly_positive: bool) -> void:
 	if not source.has(key) or not (source[key] is int or source[key] is float):

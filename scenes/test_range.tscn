@@ -1,7 +1,7 @@
 [gd_scene load_steps=14 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
-[ext_resource type="PackedScene" path="res://scenes/ship.tscn" id="2_ship"]
+[ext_resource type="PackedScene" path="res://scenes/ship_ground_effect.tscn" id="2_ship"]
 [ext_resource type="Script" path="res://scripts/test_range_environment.gd" id="3_environment"]
 [ext_resource type="Script" path="res://scripts/planetary_reference_frame.gd" id="4_planetary_frame"]
 
