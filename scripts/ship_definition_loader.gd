@@ -42,9 +42,13 @@ static func validate(data: Dictionary) -> PackedStringArray:
 	if not errors.is_empty():
 		return errors
 
-	var version: int = int(data.get("schema_version", -1))
-	if version != SUPPORTED_SCHEMA_VERSION:
-		errors.append("Unsupported schema_version %d; this build supports %d." % [version, SUPPORTED_SCHEMA_VERSION])
+	var version_value: Variant = data.get("schema_version", -1)
+	if not _is_integer_number(version_value):
+		errors.append("schema_version must be a whole number.")
+	else:
+		var version_number: float = float(version_value)
+		if version_number != float(SUPPORTED_SCHEMA_VERSION):
+			errors.append("Unsupported schema_version %s; this build supports %d." % [str(version_value), SUPPORTED_SCHEMA_VERSION])
 	var ship_id: String = str(data.get("id", "")).strip_edges()
 	if ship_id.is_empty() or not _is_safe_id(ship_id):
 		errors.append("id must be a non-empty lowercase identifier using letters, numbers, dots, underscores or hyphens.")
@@ -154,16 +158,34 @@ static func _validate_ground_effect(value: Variant, errors: PackedStringArray) -
 	_validate_positive_number(ground, "probe_ray_start_offset_m", "ground_effect", errors, false)
 	if ground.has("minimum_valid_probes"):
 		var minimum_probes: Variant = ground["minimum_valid_probes"]
-		if not (minimum_probes is int) or int(minimum_probes) < 1 or (anchors is Array and int(minimum_probes) > anchors.size()):
-			errors.append("ground_effect.minimum_valid_probes must be an integer between 1 and the number of probes.")
+		if not _is_integer_number(minimum_probes):
+			errors.append("ground_effect.minimum_valid_probes must be a whole number between 1 and the number of probes.")
+		else:
+			var minimum_probes_number: float = float(minimum_probes)
+			if minimum_probes_number < 1.0 or (anchors is Array and minimum_probes_number > float(anchors.size())):
+				errors.append("ground_effect.minimum_valid_probes must be between 1 and the number of probes.")
 	if ground.has("surface_normal_alignment_min"):
 		var alignment: Variant = ground["surface_normal_alignment_min"]
 		if not (alignment is int or alignment is float) or not is_finite(float(alignment)) or float(alignment) < 0.0 or float(alignment) > 1.0:
 			errors.append("ground_effect.surface_normal_alignment_min must be between 0 and 1.")
 	if ground.has("collision_mask"):
 		var mask: Variant = ground["collision_mask"]
-		if not (mask is int) or int(mask) < 1:
-			errors.append("ground_effect.collision_mask must be a positive integer.")
+		if not _is_integer_number(mask):
+			errors.append("ground_effect.collision_mask must be a whole number.")
+		else:
+			var mask_number: float = float(mask)
+			if mask_number < 1.0 or mask_number > 4294967295.0:
+				errors.append("ground_effect.collision_mask must be a positive 32-bit collision mask.")
+
+
+## JSON has one numeric type; Godot's JSON parser represents JSON numbers as
+## floats. Accept finite integral floats for integer-valued settings, but reject
+## fractional values instead of silently truncating them.
+static func _is_integer_number(value: Variant) -> bool:
+	if not (value is int or value is float):
+		return false
+	var number: float = float(value)
+	return is_finite(number) and is_equal_approx(number, roundf(number))
 
 
 static func _validate_positive_number(source: Dictionary, key: String, section: String, errors: PackedStringArray, strictly_positive: bool) -> void:

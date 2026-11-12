@@ -1,41 +1,20 @@
-# Space Trucker — Ground Effect Implementation
+# Space Trucker — Ground Effect Diagnostics Patch
 
-This overwrite package implements the first in-game repulsorlift ground-effect pass and connects it to the prototype ship JSON.
+This is a small follow-up to the Ground Effect Phase 2 package. It fixes missing F3 visualization and exposes runtime ground-effect telemetry so the feature can be diagnosed before changing its physics tuning.
 
-## Files included
+## Files
 
-- `scripts/repulsorlift_ground_effect_system.gd` — specialized repulsorlift system with near-surface force gain.
-- `scripts/ship_definition_loader.gd` — stricter validation for the ground-effect JSON section.
-- `data/ships/prototype_freighter/ship.json` — complete prototype definition with ground-effect settings.
-- `scenes/ship_ground_effect.tscn` — inherited ship variant that enables the specialized system.
-- `scenes/test_range.tscn` — switches the test range to the ground-effect ship variant.
-- `tests/repulsorlift_ground_effect_test.gd` — math and JSON tests.
-- `docs/GROUND_EFFECT.md` — behaviour, configuration, and manual test plan.
+- `scripts/force_vector_debug.gd` — adds an orange force-vector category for ground effect.
+- `scripts/ground_effect_diagnostics_overlay.gd` — new read-only F3 telemetry panel.
+- `scenes/ship_ground_effect.tscn` — attaches the panel to the Phase 2 test-range ship.
+- `docs/GROUND_EFFECT_DIAGNOSTICS.md` — manual verification procedure.
 
 ## Install
 
-1. Extract this ZIP into the Godot project root.
-2. Allow folder merging and overwrite the listed existing files when prompted.
-3. Do not delete any files.
-4. Keep existing `.gd.uid` sidecars; Godot will regenerate/update them if necessary.
-5. Open the project in Godot and let the filesystem scan finish.
+Extract into the Godot project root and allow overwriting. Do not delete files. Preserve existing `.gd.uid` sidecars.
 
-## Tests
+## Expected result
 
-Run:
+With the field online, vector at 90 degrees, and the ship close to a supported surface, the F3 panel should show four valid probes, a small positive clearance, proximity near 1, a multiplier approaching 1.15, and a positive additional force. The F3 3D view should show a separate orange upward arrow.
 
-```sh
-godot --headless --path . --script res://tests/repulsorlift_ground_effect_test.gd
-```
-
-Also run the existing loader tests:
-
-```sh
-godot --headless --path . --script res://tests/ship_definition_loader_test.gd
-```
-
-The package was checked for ZIP integrity and JSON syntax. Godot is not installed in the build environment, so GDScript parsing and runtime behaviour have **not** been verified here. Manual in-engine testing is required.
-
-## Parser hotfix
-
-This package includes a correction to the indentation of the `minimum_valid_probes` validation block in `scripts/ship_definition_loader.gd`. The prior ZIP had one extra indentation level on that `if` statement, causing the loader parse failure and the downstream unresolved `ShipDefinitionLoader` error.
+This patch does not change the current force tuning or add automatic landing damping. Godot 4.7.2 runtime compilation/testing was not available in the packaging environment; manual in-engine verification remains required.

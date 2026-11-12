@@ -27,6 +27,7 @@ func _ready() -> void:
 	_materials["pitch"] = _make_material(Color(0.35, 1.0, 0.45, 1.0))
 	_materials["roll"] = _make_material(Color(1.0, 0.8, 0.2, 1.0))
 	_materials["yaw"] = _make_material(Color(1.0, 0.35, 0.85, 1.0))
+	_materials["ground_effect"] = _make_material(Color(1.0, 0.42, 0.12, 1.0))
 
 
 func update_force_vectors(
@@ -45,6 +46,7 @@ func update_force_vectors(
 	_draw_category("pitch", force_vectors, body_inverse, safe_reference_force)
 	_draw_category("roll", force_vectors, body_inverse, safe_reference_force)
 	_draw_category("yaw", force_vectors, body_inverse, safe_reference_force)
+	_draw_category("ground_effect", force_vectors, body_inverse, safe_reference_force)
 
 
 func _draw_category(

@@ -1,16 +1,8 @@
 No files need to be deleted.
-
-Overwritten existing files:
-- scripts/ship_definition_loader.gd
-- data/ships/prototype_freighter/ship.json
-- scenes/test_range.tscn
-
-New files:
-- scripts/repulsorlift_ground_effect_system.gd
+Overwrite:
+- scripts/force_vector_debug.gd
 - scenes/ship_ground_effect.tscn
-- tests/repulsorlift_ground_effect_test.gd
-- docs/GROUND_EFFECT.md
-- OVERWRITE_README.md
-- OVERWRITE_CLEANUP.txt
-
-Preserve all existing .gd.uid files. Do not remove the original scenes/ship.tscn or scripts/repulsorlift_system.gd; the new ship scene inherits from them.
+Add:
+- scripts/ground_effect_diagnostics_overlay.gd
+- docs/GROUND_EFFECT_DIAGNOSTICS.md
+Keep all existing .gd.uid files. Godot can regenerate sidecars if needed.
