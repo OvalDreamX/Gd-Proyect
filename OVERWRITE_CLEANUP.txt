@@ -1,8 +1,3 @@
-No files need to be deleted.
-Overwrite:
-- scripts/force_vector_debug.gd
-- scenes/ship_ground_effect.tscn
-Add:
-- scripts/ground_effect_diagnostics_overlay.gd
-- docs/GROUND_EFFECT_DIAGNOSTICS.md
-Keep all existing .gd.uid files. Godot can regenerate sidecars if needed.
+CLEANUP: No existing files need to be deleted or replaced for Phase 2A.
+
+This package is additive. Preserve existing .gd.uid files and any UID sidecars Godot generates for the new scripts.
