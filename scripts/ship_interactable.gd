@@ -1,7 +1,7 @@
 extends RigidBody3D
 class_name ShipInteractable
-## Physics-enabled placeholder freighter. The single rigid-body root is retained
-## for all flight forces, moments, collision response, and future cargo changes.
+## Physics-enabled ship root. One rigid body owns movement, rotation, mass,
+## inertia and collisions; visual model loading is handled by ShipModelMount.
 
 @export_category("Mass and cargo rating")
 ## Maximum abstract cargo payload. This is a design limit, not current cargo.
@@ -12,7 +12,7 @@ var _design_dry_mass_kg: float = 0.0
 @onready var pilot_zone: Area3D = $PilotZone
 @onready var seat_anchor: Marker3D = $CockpitSeat
 @onready var cockpit_camera: Camera3D = $CockpitSeat/CockpitCamera
-@onready var hull_visual: Node3D = $Visuals/Hull
+@onready var hull_visual: Node3D = $Visuals/Exterior
 @onready var cockpit_interior: Node3D = $Visuals/CockpitInterior
 
 var _pilot_claimed: bool = false

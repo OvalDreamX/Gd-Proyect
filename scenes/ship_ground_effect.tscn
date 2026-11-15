@@ -6,7 +6,7 @@
 
 [node name="PrototypeFreighter" instance=ExtResource("1_ship")]
 
-[node name="RepulsorliftSystem" parent="." index="7"]
+[node name="RepulsorliftSystem" parent="." index="8"]
 script = ExtResource("2_ground_effect")
 
 [node name="GroundEffectDiagnostics" type="CanvasLayer" parent="."]

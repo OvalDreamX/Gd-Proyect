@@ -28,19 +28,31 @@ static func validate_model_root(model_root: Node) -> Dictionary:
 		errors.append("GLB scene root must be Node3D; received %s." % model_root.get_class())
 		return _make_result(errors, warnings, anchors, counts)
 
-	if String(model_root.name) != "SHIP_root":
-		warnings.append("Model root is named %s; the contract name is SHIP_root." % String(model_root.name))
+	# GLTFDocument.generate_scene() may wrap the authored glTF scene in a
+	# generated Node3D named after the file. Accept that wrapper only when its
+	# direct authored scene root is named SHIP_root.
+	if not _has_authored_ship_root(model_root):
+		errors.append("Model must contain a top-level Node3D named SHIP_root.")
 
 	_scan_node(model_root, anchors, errors, warnings, counts)
 
 	if int(counts["mesh_count"]) == 0:
-		warnings.append("Model contains no MeshInstance3D nodes; it may be intentionally invisible.")
+		errors.append("Model contains no renderable MeshInstance3D surfaces.")
 	if int(counts["skeleton_count"]) > 1:
 		warnings.append("Model contains multiple Skeleton3D nodes; the ship standard expects one shared armature.")
 	if anchors.is_empty():
 		warnings.append("Model contains no ANCHOR_ nodes.")
 
 	return _make_result(errors, warnings, anchors, counts)
+
+
+static func _has_authored_ship_root(model_root: Node) -> bool:
+	if String(model_root.name) == "SHIP_root":
+		return model_root is Node3D
+	for child: Node in model_root.get_children():
+		if String(child.name) == "SHIP_root" and child is Node3D:
+			return true
+	return false
 
 
 static func _scan_node(
@@ -53,7 +65,11 @@ static func _scan_node(
 	var node_name: String = String(node.name)
 
 	if node is MeshInstance3D:
-		counts["mesh_count"] = int(counts["mesh_count"]) + 1
+		var mesh_instance: MeshInstance3D = node as MeshInstance3D
+		if is_instance_valid(mesh_instance.mesh) and mesh_instance.mesh.get_surface_count() > 0:
+			counts["mesh_count"] = int(counts["mesh_count"]) + 1
+		else:
+			errors.append("%s has no renderable Mesh resource or surfaces." % node_name)
 	if node is Skeleton3D:
 		counts["skeleton_count"] = int(counts["skeleton_count"]) + 1
 

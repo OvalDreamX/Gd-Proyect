@@ -7,6 +7,7 @@ class_name ShipDefinition
 var schema_version: int = 1
 var ship_id: String = ""
 var display_name: String = ""
+var model_path: String = ""
 var manufacturer: String = ""
 var ship_class: String = ""
 var physics: Dictionary = {}
@@ -18,10 +19,12 @@ var ground_effect: Dictionary = {}
 var cameras: Dictionary = {}
 var vanes: Array[Dictionary] = []
 
+
 func configure(source: Dictionary) -> void:
 	schema_version = int(source.get("schema_version", 1))
 	ship_id = str(source.get("id", ""))
 	display_name = str(source.get("display_name", ""))
+	model_path = str(source.get("model", ""))
 	var identity: Dictionary = source.get("identity", {})
 	manufacturer = str(identity.get("manufacturer", ""))
 	ship_class = str(identity.get("class", ""))

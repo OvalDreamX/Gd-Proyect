@@ -25,7 +25,7 @@ class_name ShipCameraController
 @onready var _external_camera_rig: Node3D = $ExternalCameraRig
 @onready var _spring_arm: SpringArm3D = $ExternalCameraRig/SpringArm3D
 @onready var _external_camera: Camera3D = $ExternalCameraRig/SpringArm3D/ExternalCamera
-@onready var _hull_visual: Node3D = get_node("../Visuals/Hull") as Node3D
+@onready var _hull_visual: Node3D = get_node("../Visuals/Exterior") as Node3D
 @onready var _cockpit_interior: Node3D = get_node("../Visuals/CockpitInterior") as Node3D
 
 const DEFAULT_EXTERNAL_PITCH_RADIANS: float = -0.32
@@ -208,7 +208,7 @@ func get_look_angles_degrees() -> Vector2:
 
 
 func _apply_view_visibility() -> void:
-	# The placeholder hull is hidden only while the cockpit view is active.
-	# The external camera restores the ship exterior just like a normal view switch.
+	# Hide the complete exterior group in cockpit view. It contains either the
+	# fallback placeholder or an imported GLB; the two are never switched apart.
 	_hull_visual.visible = _using_external_view
 	_cockpit_interior.visible = not _using_external_view

@@ -7,6 +7,7 @@ class_name ShipDefinitionLoader
 const SUPPORTED_SCHEMA_VERSION: int = 1
 const REQUIRED_TOP_LEVEL: PackedStringArray = ["schema_version", "id", "display_name", "model", "physics", "cargo", "propulsion"]
 
+
 static func load_file(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return _failure(["File does not exist: %s" % path])
@@ -16,6 +17,7 @@ static func load_file(path: String) -> Dictionary:
 	var text: String = file.get_as_text()
 	file.close()
 	return parse_text(text, path)
+
 
 static func parse_text(json_text: String, source_name: String = "<memory>") -> Dictionary:
 	var parser := JSON.new()
@@ -33,6 +35,7 @@ static func parse_text(json_text: String, source_name: String = "<memory>") -> D
 	var definition := ShipDefinition.new()
 	definition.configure(data)
 	return {"valid": true, "definition": definition, "errors": PackedStringArray()}
+
 
 static func validate(data: Dictionary) -> PackedStringArray:
 	var errors := PackedStringArray()
@@ -71,7 +74,9 @@ static func validate(data: Dictionary) -> PackedStringArray:
 		errors.append("cargo must be an object.")
 	if not (propulsion_variant is Dictionary):
 		errors.append("propulsion must be an object.")
-	if not (physics_variant is Dictionary) or not (cargo_variant is Dictionary) or not (propulsion_variant is Dictionary) or not errors.is_empty():
+	# Only stop nested validation when a required section cannot be inspected.
+	# Earlier identity/path errors must not suppress independent diagnostic errors.
+	if not (physics_variant is Dictionary) or not (cargo_variant is Dictionary) or not (propulsion_variant is Dictionary):
 		return errors
 	var physics: Dictionary = physics_variant
 	var cargo: Dictionary = cargo_variant
@@ -178,9 +183,8 @@ static func _validate_ground_effect(value: Variant, errors: PackedStringArray) -
 				errors.append("ground_effect.collision_mask must be a positive 32-bit collision mask.")
 
 
-## JSON has one numeric type; Godot's JSON parser represents JSON numbers as
-## floats. Accept finite integral floats for integer-valued settings, but reject
-## fractional values instead of silently truncating them.
+## Godot's JSON parser represents JSON numbers as floats. Accept finite integral
+## floats for integer-valued settings, but reject fractional values.
 static func _is_integer_number(value: Variant) -> bool:
 	if not (value is int or value is float):
 		return false
@@ -196,6 +200,7 @@ static func _validate_positive_number(source: Dictionary, key: String, section: 
 	if not is_finite(value) or (value <= 0.0 if strictly_positive else value < 0.0):
 		errors.append("%s.%s must be %s." % [section, key, "greater than zero" if strictly_positive else "zero or greater"])
 
+
 static func _validate_vector3(source: Dictionary, key: String, section: String, errors: PackedStringArray, positive: bool) -> void:
 	if not source.has(key) or not (source[key] is Array) or source[key].size() != 3:
 		errors.append("%s.%s must be an array of exactly three numbers." % [section, key])
@@ -209,8 +214,10 @@ static func _validate_vector3(source: Dictionary, key: String, section: String, 
 		if vector.x <= 0.0 or vector.y <= 0.0 or vector.z <= 0.0:
 			errors.append("%s.%s components must all be greater than zero." % [section, key])
 
+
 static func _array_to_vector3(value: Array) -> Vector3:
 	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+
 
 static func _is_safe_id(value: String) -> bool:
 	for index: int in range(value.length()):
@@ -219,6 +226,7 @@ static func _is_safe_id(value: String) -> bool:
 		if not valid:
 			return false
 	return true
+
 
 static func _failure(errors: PackedStringArray) -> Dictionary:
 	return {"valid": false, "definition": null, "errors": errors}

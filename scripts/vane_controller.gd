@@ -76,6 +76,10 @@ const MINIMUM_GROUP_AUTHORITY: float = 0.000001
 const ALIGNMENT_DEGREES_TO_RADIANS: float = PI / 180.0
 const MINIMUM_FORCE_WEIGHT: float = 0.000001
 const MAX_THERMAL_LOAD_FRACTION: float = 1.5
+const VALID_CONTROL_CHANNELS: Array[StringName] = [
+	&"pitch", &"roll", &"yaw", &"lift", &"main_thrust",
+	&"translate_x", &"translate_y", &"translate_z"
+]
 
 var _definitions_by_id: Dictionary = {}
 var _runtime_states_by_id: Dictionary = {}
@@ -87,41 +91,137 @@ func _enter_tree() -> void:
 	_rebuild_runtime_states()
 
 
-## Builds per-instance state without modifying the shared Resource definitions.
-func _rebuild_runtime_states() -> void:
-	_definitions_by_id.clear()
-	_runtime_states_by_id.clear()
-	_configuration_errors.clear()
+## Replaces the ship's actuator definitions as one validated transaction.
+## Existing runtime condition is retained for IDs that remain in the new set;
+## new IDs receive a clean state. An invalid candidate leaves the active
+## configuration and runtime state untouched.
+func configure_vanes(candidate_definitions: Array[Resource]) -> Dictionary:
+	var candidate_by_id: Dictionary = {}
+	var candidate_states: Dictionary = {}
+	var errors := PackedStringArray()
 
-	for resource in vane_definitions:
-		if not resource is VaneDefinition:
-			_configuration_errors.append("Vane entry is missing or is not a VaneDefinition Resource.")
+	for resource_variant: Variant in candidate_definitions:
+		if not (resource_variant is VaneDefinition):
+			errors.append("Vane entry is missing or is not a VaneDefinition Resource.")
 			continue
-		var definition := resource as VaneDefinition
-		if definition.vane_id.is_empty():
-			_configuration_errors.append("A vane definition has an empty vane_id.")
+
+		var definition: VaneDefinition = resource_variant as VaneDefinition
+		var vane_id: StringName = definition.vane_id
+		if vane_id.is_empty():
+			errors.append("A vane definition has an empty vane_id.")
 			continue
-		if _definitions_by_id.has(definition.vane_id):
-			_configuration_errors.append("Duplicate vane_id: %s" % String(definition.vane_id))
+		if candidate_by_id.has(vane_id):
+			errors.append("Duplicate vane_id: %s" % String(vane_id))
 			continue
 		if definition.group_id.is_empty():
-			_configuration_errors.append("Vane %s has an empty group_id." % String(definition.vane_id))
+			errors.append("Vane %s has an empty group_id." % String(vane_id))
 			continue
-		if definition.nominal_authority_twr < 0.0:
-			_configuration_errors.append("Vane %s has negative nominal authority." % String(definition.vane_id))
+		if not is_finite(definition.nominal_authority_twr) or definition.nominal_authority_twr < 0.0:
+			errors.append("Vane %s has invalid nominal authority; expected a finite value >= 0." % String(vane_id))
+			continue
+		if not _is_finite_vector3(definition.local_position):
+			errors.append("Vane %s has a non-finite local position." % String(vane_id))
+			continue
+		if (
+			not _is_finite_vector3(definition.local_thrust_axis)
+			or definition.local_thrust_axis.length_squared() <= 0.000001
+		):
+			errors.append("Vane %s has an invalid or zero local thrust axis." % String(vane_id))
 			continue
 
-		_definitions_by_id[definition.vane_id] = definition
-		_runtime_states_by_id[definition.vane_id] = VaneRuntimeState.new()
+		var invalid_weights := false
+		for channel_variant: Variant in definition.control_weights.keys():
+			var channel_name: StringName = StringName(str(channel_variant))
+			var weight_variant: Variant = definition.control_weights[channel_variant]
+			if not VALID_CONTROL_CHANNELS.has(channel_name):
+				errors.append(
+					"Vane %s has unknown control channel '%s'." % [String(vane_id), str(channel_variant)]
+				)
+				invalid_weights = true
+				continue
+			if not _is_whole_control_weight(weight_variant):
+				errors.append(
+					"Vane %s has invalid %s control weight; expected a whole number from 0 to 100."
+					% [String(vane_id), str(channel_variant)]
+				)
+				invalid_weights = true
+		if invalid_weights:
+			continue
 
-	_configuration_valid = _configuration_errors.is_empty() and not _definitions_by_id.is_empty()
-	if _definitions_by_id.is_empty():
-		_configuration_errors.append("No valid vane definitions were registered.")
+		candidate_by_id[vane_id] = definition
+		# Keep thermal condition, damage and alignment across a definition/model
+		# refresh. The stable vane ID is the persistence key for runtime state.
+		var existing_state: VaneRuntimeState = _runtime_states_by_id.get(vane_id) as VaneRuntimeState
+		candidate_states[vane_id] = existing_state if is_instance_valid(existing_state) else VaneRuntimeState.new()
+
+	if candidate_by_id.is_empty():
+		errors.append("No valid vane definitions were provided.")
+	if not errors.is_empty():
+		return {
+			"success": false,
+			"errors": errors,
+			"active_vane_count": _definitions_by_id.size(),
+		}
+
+	# Commit only after every candidate has passed validation. Duplicate the
+	# typed array container, not its Resource entries: definitions are
+	# immutable-by-convention and runtime state is stored separately.
+	var committed_definitions: Array[Resource] = []
+	for definition_resource: Resource in candidate_definitions:
+		committed_definitions.append(definition_resource)
+	vane_definitions = committed_definitions
+	_definitions_by_id = candidate_by_id
+	_runtime_states_by_id = candidate_states
+	_configuration_errors.clear()
+	_configuration_valid = true
+	return {
+		"success": true,
+		"errors": PackedStringArray(),
+		"active_vane_count": _definitions_by_id.size(),
+	}
+
+
+## Initial scene-load entry point. Uses the same validation/commit path as
+## runtime model refreshes, but records invalid startup configuration locally.
+func _rebuild_runtime_states() -> void:
+	var result: Dictionary = configure_vanes(vane_definitions)
+	if not bool(result.get("success", false)):
+		_configuration_errors = result.get("errors", PackedStringArray())
 		_configuration_valid = false
+
+
+func _is_finite_vector3(value: Vector3) -> bool:
+	return is_finite(value.x) and is_finite(value.y) and is_finite(value.z)
+
+
+## JSON numbers may arrive as either int or float Variants. The schema requires
+## integer-valued weights, not one particular Variant storage type.
+func _is_whole_control_weight(value: Variant) -> bool:
+	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+		return false
+	var numeric_value: float = float(value)
+	return (
+		is_finite(numeric_value)
+		and numeric_value >= 0.0
+		and numeric_value <= 100.0
+		and is_equal_approx(numeric_value, roundf(numeric_value))
+	)
 
 
 func get_vane_count() -> int:
 	return _definitions_by_id.size()
+
+
+## Returns the configured actuator definition, or null when the ID is unknown.
+func get_vane_definition(vane_id: StringName) -> VaneDefinition:
+	return _definitions_by_id.get(vane_id) as VaneDefinition
+
+
+func get_vane_ids() -> Array[StringName]:
+	var result: Array[StringName] = []
+	for vane_id_variant: Variant in _definitions_by_id.keys():
+		result.append(StringName(str(vane_id_variant)))
+	return result
 
 
 func get_healthy_vane_count() -> int:
@@ -177,6 +277,45 @@ func get_vane_nominal_authority_twr(vane_id: StringName) -> float:
 		return 0.0
 	var definition := _definitions_by_id[vane_id] as VaneDefinition
 	return definition.nominal_authority_twr
+
+
+## Read-only effective actuator authority after failure, integrity, sputter and
+## thermal derating. The allocator uses this as the current force limit.
+func get_vane_effective_authority_twr(vane_id: StringName) -> float:
+	if not _definitions_by_id.has(vane_id):
+		return 0.0
+	var definition := _definitions_by_id[vane_id] as VaneDefinition
+	if not definition.enabled:
+		return 0.0
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	return definition.nominal_authority_twr * state.authority_multiplier()
+
+
+## Returns the current local actuator axis after mechanical alignment drift.
+## Geometry-based allocation must use this axis, not the pristine resource axis,
+## otherwise a damaged or misaligned vane would be simulated as perfectly aligned.
+func get_vane_effective_thrust_axis_local(vane_id: StringName) -> Vector3:
+	if not _definitions_by_id.has(vane_id):
+		return Vector3.ZERO
+	var definition := _definitions_by_id[vane_id] as VaneDefinition
+	if not definition.enabled:
+		return Vector3.ZERO
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	var alignment_radians: Vector3 = state.alignment_offset_degrees * ALIGNMENT_DEGREES_TO_RADIANS
+	var alignment_basis: Basis = Basis.from_euler(alignment_radians)
+	return (alignment_basis * definition.local_thrust_axis).normalized()
+
+
+## Only fully intact, non-failed vanes may receive redistributed authority, in
+## keeping with the existing thermal/damage model.
+func can_vane_receive_redistributed_authority(vane_id: StringName) -> bool:
+	if not _definitions_by_id.has(vane_id):
+		return false
+	var definition := _definitions_by_id[vane_id] as VaneDefinition
+	if not definition.enabled:
+		return false
+	var state := _runtime_states_by_id[vane_id] as VaneRuntimeState
+	return not state.failed and state.integrity >= 0.999
 
 
 ## Convenience wrapper: calculate all enabled vanes belonging to one logical group.

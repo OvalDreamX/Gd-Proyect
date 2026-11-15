@@ -34,6 +34,8 @@ var _cargo_y_label: Label
 var _cargo_z_slider: HSlider
 var _cargo_z_label: Label
 var _cargo_status_label: Label
+const DIAGNOSTICS_UPDATE_INTERVAL: float = 0.2 # 5 Hz update rate for heavy text
+var _diagnostics_time_remaining: float = 0.0
 
 
 func _ready() -> void:
@@ -51,14 +53,15 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_flight_display.call("update_telemetry", telemetry)
 
 	var debug_enabled: bool = bool(telemetry.get("debug_overview_enabled", false))
-	# Keep the side instruments and control viewer available in cockpit and
-	# external views. The overlay itself suppresses only central flight symbology
-	# when the cockpit camera is not aligned with the ship boresight.
 	_flight_display.visible = not debug_enabled
 	_debug_panel.visible = debug_enabled
 
 	if debug_enabled:
-		_update_debug_text(telemetry)
+		# Decrement by approx 0.033s (30Hz telemetry call rate)
+		_diagnostics_time_remaining -= 0.033
+		if _diagnostics_time_remaining <= 0.0:
+			_update_debug_text(telemetry)
+			_diagnostics_time_remaining = DIAGNOSTICS_UPDATE_INTERVAL
 
 
 func _build_hud() -> void:

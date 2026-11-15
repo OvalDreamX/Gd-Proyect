@@ -73,3 +73,8 @@ Only supported glTF animation channels should drive game mechanisms: node transl
 - [ ] One shared armature where practical; bones use `BONE_`.
 - [ ] Required animations use `action_` and are actually exported.
 - [ ] GLB passes the runtime ship-model test.
+
+
+## Runtime placeholder behavior (Phase 2B)
+
+The game loads the JSON `model` path relative to that definition's folder. Until the GLB exists and passes runtime validation, the prototype cube remains visible. A missing GLB is an expected fallback state during development; it does not disable the ship's collision or flight systems. The placeholder is hidden only after the imported model has been attached successfully.
