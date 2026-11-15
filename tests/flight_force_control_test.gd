@@ -5,6 +5,7 @@ extends SceneTree
 ## godot --headless --path . --script res://tests/flight_force_control_test.gd
 
 const SHIP_SCENE = preload("res://scenes/ship.tscn")
+const VANE_DEFINITION_SCRIPT = preload("res://scripts/vane_definition.gd")
 const EPSILON: float = 0.01
 const TEST_ALTITUDE: float = 100.0
 const TEST_TICKS: int = 30
@@ -53,6 +54,7 @@ func _run_tests() -> void:
 	var main_force: Vector3 = Vector3.ZERO
 
 	_expect(vane_controller.is_configuration_valid(), "Vane configuration is valid")
+	_set_all_vane_temperatures(vane_controller, 60.0)
 	_expect_near(ship.mass, 30000.0, EPSILON, "Prototype freighter starts at 30 tonnes dry mass")
 	_expect_near(ship.max_payload_mass_kg, 25000.0, EPSILON, "Prototype freighter payload rating is 25 tonnes")
 	_expect_near(ship.get_design_gross_mass_kg(), 55000.0, EPSILON, "Design gross mass is 55 tonnes")
@@ -87,6 +89,7 @@ func _run_tests() -> void:
 
 	# Neutral hover must produce a central upward force and no control torque.
 	vane_controller.reset_all_vanes()
+	_set_all_vane_temperatures(vane_controller, 60.0)
 	system.apply_flight_control_forces(true, 1.0, 90.0, 0.0, 0.0, 0.0)
 	telemetry = system.get_telemetry()
 	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
@@ -101,17 +104,23 @@ func _run_tests() -> void:
 	telemetry = system.get_telemetry()
 	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
 	_expect_near(main_force.length(), 0.0, EPSILON, "Zero main-vector throttle produces no translational force")
-	var idle_pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
-	var idle_roll_forces: Array[Dictionary] = _forces_of_kind(telemetry, "roll")
+	var combined_maneuver_forces: Array[Dictionary] = _forces_of_kind(telemetry, "maneuver")
 	var idle_yaw_forces: Array[Dictionary] = _forces_of_kind(telemetry, "yaw")
-	_expect_equal(idle_pitch_forces.size(), 2, "Pitch remains available with the field online and main-vector throttle at zero")
-	_expect_equal(idle_roll_forces.size(), 2, "Roll remains available with the field online and main-vector throttle at zero")
-	_expect_equal(idle_yaw_forces.size(), 2, "Yaw remains available with the field online and main-vector throttle at zero")
+	_expect_equal(combined_maneuver_forces.size(), 4, "Combined pitch/roll demand allocates across all four eligible bottom actuators")
+	_expect_equal(idle_yaw_forces.size(), 2, "Yaw remains available through the legacy side-vane pair")
 	_expect_near(float(telemetry.get("maneuver_power_multiplier", 0.0)), 1.2, EPSILON, "Idle main-vector allocation provides a capped 20% maneuver reserve")
+
+	# Compare the same single-axis pitch allocation at zero and full main-vector
+	# power; a shared actuator may contribute to pitch and roll, so combined
+	# demands are reported as MANEUVER rather than double-counted per channel.
+	system.apply_flight_control_forces(true, 0.0, 90.0, 1.0, 0.0, 0.0, 0.5, 1.2)
+	telemetry = system.get_telemetry()
+	var idle_pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
 	var idle_pitch_magnitude: float = _sum_force_magnitudes(idle_pitch_forces)
 	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0, 0.5, 1.2)
-	telemetry = system.get_telemetry()	
+	telemetry = system.get_telemetry()
 	var full_power_pitch_magnitude: float = _sum_force_magnitudes(_forces_of_kind(telemetry, "pitch"))
+	_expect_equal(idle_pitch_forces.size(), 4, "Pitch demand is distributed over four geometric actuators")
 	_expect_near(idle_pitch_magnitude / maxf(full_power_pitch_magnitude, 0.001), 1.2, 0.01, "Idle throttle increases maneuver force by only the configured 20%")
 
 	# Pitch: front pair up, rear pair down. Their translations cancel while
@@ -121,9 +130,13 @@ func _run_tests() -> void:
 	var pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
 	var pitch_pair_force: Vector3 = _sum_forces(pitch_forces)
 	var pitch_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	_expect_equal(pitch_forces.size(), 2, "Pitch creates front and rear force vectors")
+	_expect_equal(pitch_forces.size(), 4, "Pitch allocation drives each eligible vane from its geometry")
 	_expect_near(pitch_pair_force.length(), 0.0, EPSILON, "Healthy pitch pair cancels net translation")
 	_expect(pitch_torque.x > EPSILON, "Positive pitch command creates nose-up torque")
+	var pitch_allocation: Dictionary = telemetry.get("maneuver_allocator", {})
+	_expect(bool(pitch_allocation.get("success", false)), "Pitch actuator allocation succeeds")
+	_expect(bool(pitch_allocation.get("converged", false)), "Pitch actuator allocation converges from its warm start")
+	_expect_equal(int(telemetry.get("maneuver_allocator_active_actuators", 0)), 4, "Pitch allocation discovers all four configured bottom actuators")
 
 	# Roll: left pair up, right pair down.
 	system.apply_flight_control_forces(true, 1.0, 90.0, 0.0, 1.0, 0.0)
@@ -131,7 +144,7 @@ func _run_tests() -> void:
 	var roll_forces: Array[Dictionary] = _forces_of_kind(telemetry, "roll")
 	var roll_pair_force: Vector3 = _sum_forces(roll_forces)
 	var roll_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	_expect_equal(roll_forces.size(), 2, "Roll creates left and right force vectors")
+	_expect_equal(roll_forces.size(), 4, "Roll allocation drives each eligible vane from its geometry")
 	_expect_near(roll_pair_force.length(), 0.0, EPSILON, "Healthy roll pair cancels net translation")
 	_expect(roll_torque.z < -EPSILON, "Positive roll command banks right")
 
@@ -146,6 +159,24 @@ func _run_tests() -> void:
 	_expect(yaw_torque.y < -EPSILON, "Positive yaw command turns the nose right")
 
 	# Q/E changes the ship-relative main force vector, not just a HUD value.
+	# Earlier online test calls apply the controller's baseline operating wear
+	# even when this vane is not carrying meaningful load. Restoring temperature
+	# alone is insufficient: the accumulated integrity loss also derates output.
+	# Reset both condition variables immediately before this nominal-rating test.
+	_expect(
+		vane_controller.set_vane_integrity(&"main_rear", 1.0),
+		"Main propulsion actuator integrity is restored for its rated-force test"
+	)
+	_expect(
+		vane_controller.set_vane_temperature(&"main_rear", 60.0),
+		"Main propulsion actuator temperature is restored for its rated-force test"
+	)
+	_expect_near(
+		vane_controller.get_vane_effective_authority_twr(&"main_rear"),
+		1.5,
+		0.0001,
+		"Main propulsion actuator is at nominal 60 C authority before rated-force test"
+	)
 	system.apply_flight_control_forces(true, 1.0, 0.0, 0.0, 0.0, 0.0)
 	telemetry = system.get_telemetry()
 	main_force = telemetry.get("lift_main_force_vector", Vector3.ZERO)
@@ -176,32 +207,33 @@ func _run_tests() -> void:
 	_expect_near(telemetry.get("lift_force_newtons", 0.0), 0.0, EPSILON, "Field OFF removes all generated forces")
 	_expect_equal(telemetry.get("lift_force_vectors", []).size(), 0, "Field OFF leaves no active force-vector debug entries")
 
-	# The damaged right-front vane shifts the front group's weighted point left,
-	# lowers its force, and leaves the expected unwanted roll during pitch-up.
+	# The geometry allocator exposes each actuator's actual contribution. A
+	# weakened front-right vane cannot match its healthy counterpart, so the
+	# asymmetry produces the physically expected small cross-axis roll moment.
 	vane_controller.reset_all_vanes()
+	_set_all_vane_temperatures(vane_controller, 60.0)
 	vane_controller.set_vane_integrity(&"bottom_front_right", 0.5)
-	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0)
+	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0, 0.0, 1.2)
 	telemetry = system.get_telemetry()
 	var damaged_pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
-	var damaged_front: Dictionary = _find_force(damaged_pitch_forces, "PITCH FRONT")
 	var damaged_roll_moment: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	var damaged_front_point: Vector3 = damaged_front.get("application_point_world", Vector3.ZERO)
-	_expect(damaged_front_point.x < ship.global_position.x, "Front resultant shifts toward the healthy left-front vane")
-	_expect(damaged_roll_moment.z < -EPSILON, "Asymmetric front damage produces the expected unwanted roll")
-	var front_pair_ids: Array[StringName] = [&"bottom_front_left", &"bottom_front_right"]
-	var damaged_no_compensation: Dictionary = vane_controller.calculate_vane_set_resultant(
-		front_pair_ids, Vector3.UP, 1000.0, ship.global_transform, ship.center_of_mass, 0.0, 1.2
+	_expect_equal(damaged_pitch_forces.size(), 4, "Damaged pitch allocation continues to use the full eligible actuator set")
+	_expect(damaged_roll_moment.z < -EPSILON, "Asymmetric vane damage creates the expected cross-axis roll moment")
+	var uncompensated_authority: float = _sum_contribution_authority(telemetry.get("lift_vane_contributions", []))
+	var damaged_right_authority: float = _find_contribution_authority(
+		telemetry.get("lift_vane_contributions", []), &"bottom_front_right"
 	)
-	var damaged_with_compensation: Dictionary = vane_controller.calculate_vane_set_resultant(
-		front_pair_ids, Vector3.UP, 1000.0, ship.global_transform, ship.center_of_mass, 0.5, 1.2
+	_expect_near(damaged_right_authority, 0.1375, 0.0001, "Damaged actuator output reflects its 50% integrity limit")
+
+	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0, 0.5, 1.2)
+	telemetry = system.get_telemetry()
+	var compensated_authority: float = _sum_contribution_authority(telemetry.get("lift_vane_contributions", []))
+	var compensated_right_authority: float = _find_contribution_authority(
+		telemetry.get("lift_vane_contributions", []), &"bottom_front_right"
 	)
-	var compensated_authority: float = float(damaged_with_compensation.get("effective_authority_twr", 0.0))
-	var uncompensated_authority: float = float(damaged_no_compensation.get("effective_authority_twr", 0.0))
-	_expect(compensated_authority > uncompensated_authority, "FCC redistribution uses healthy spare vane authority to recover part of a damaged group's output")
-	_expect(compensated_authority < float(damaged_with_compensation.get("nominal_authority_twr", 0.0)), "Bounded redistribution never conceals the entire damaged-vane deficit")
-	var uncompensated_point: Vector3 = damaged_no_compensation.get("effective_application_point_world", Vector3.ZERO)
-	var compensated_point: Vector3 = damaged_with_compensation.get("effective_application_point_world", Vector3.ZERO)
-	_expect(compensated_point.x < uncompensated_point.x, "Redistribution shifts the resultant toward the healthy vane without restoring symmetry")
+	_expect(compensated_authority > uncompensated_authority, "Geometry allocator redistributes part of a damaged vane's lost capacity to healthy actuators")
+	_expect(compensated_authority < 1.1, "Redistribution does not conceal the full damaged-vane deficit")
+	_expect_near(compensated_right_authority, damaged_right_authority, 0.0001, "Damaged actuator does not redistribute authority to itself")
 
 	# F3 controls only the visualization; it does not modify any force values.
 	var debug_node := ship.get_node("ForceVectorDebug") as ForceVectorDebug
@@ -222,7 +254,41 @@ func _run_tests() -> void:
 	for _tick in range(TEST_TICKS):
 		system.apply_flight_control_forces(true, 1.0, 90.0, 0.5, 0.0, 0.0)
 		await physics_frame
-	_expect(absf(ship.angular_velocity.x) > 0.001, "Pitch force pair produces physical angular velocity")
+	_expect(absf(ship.angular_velocity.x) > 0.001, "Geometry-allocated pitch forces produce physical angular velocity")
+
+	# Runtime discovery must not depend on a fixed FR/FL/RR/RL slot list. Add
+	# one extra pitch-only actuator through the same transactional config API and
+	# verify the allocator discovers and commands it without changing main lift.
+	var extended_definitions: Array[Resource] = []
+	for vane_id: StringName in vane_controller.get_vane_ids():
+		var existing_definition: Resource = vane_controller.get_vane_definition(vane_id)
+		extended_definitions.append(existing_definition.duplicate(true))
+	var extra_vane: Resource = VANE_DEFINITION_SCRIPT.new()
+	extra_vane.set("vane_id", &"aux_pitch_center")
+	extra_vane.set("display_name", "Auxiliary Pitch Center")
+	extra_vane.set("group_id", &"maneuver_auxiliary")
+	extra_vane.set("axis_family", &"vertical")
+	extra_vane.set("local_thrust_axis", Vector3.UP)
+	extra_vane.set("control_weights", {
+		"pitch": 100,
+		"roll": 0,
+		"yaw": 0,
+		"lift": 0,
+		"main_thrust": 0,
+		"translate_x": 0,
+		"translate_y": 0,
+		"translate_z": 0,
+	})
+	extra_vane.set("local_position", Vector3(0.0, -0.65, -1.8))
+	extra_vane.set("nominal_authority_twr", 0.05)
+	extended_definitions.append(extra_vane)
+	var extended_result: Dictionary = vane_controller.configure_vanes(extended_definitions)
+	_expect(bool(extended_result.get("success", false)), "VaneController accepts a runtime-added geometry actuator")
+	_set_all_vane_temperatures(vane_controller, 60.0)
+	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0)
+	telemetry = system.get_telemetry()
+	_expect_equal(int(telemetry.get("maneuver_allocator_active_actuators", 0)), 5, "Geometry allocator discovers a fifth actuator without fixed slot assumptions")
+	_expect(_find_contribution_authority(telemetry.get("lift_vane_contributions", []), &"aux_pitch_center") > 0.0, "Runtime-added actuator receives a nonzero geometry-derived pitch allocation")
 
 	print("Flight force-control tests: %d checks, %d failures." % [_checks, _failures])
 	ship.queue_free()
@@ -253,11 +319,25 @@ func _sum_force_magnitudes(entries: Array[Dictionary]) -> float:
 	return total
 
 
-func _find_force(entries: Array[Dictionary], force_name: String) -> Dictionary:
-	for entry in entries:
-		if str(entry.get("name", "")) == force_name:
-			return entry
-	return {}
+func _set_all_vane_temperatures(controller: VaneController, temperature_celsius: float) -> void:
+	for vane_id: StringName in controller.get_vane_ids():
+		controller.set_vane_temperature(vane_id, temperature_celsius)
+
+
+func _sum_contribution_authority(contributions: Array) -> float:
+	var total: float = 0.0
+	for contribution_value: Variant in contributions:
+		var contribution: Dictionary = contribution_value
+		total += float(contribution.get("effective_authority_twr", 0.0))
+	return total
+
+
+func _find_contribution_authority(contributions: Array, vane_id: StringName) -> float:
+	for contribution_value: Variant in contributions:
+		var contribution: Dictionary = contribution_value
+		if StringName(contribution.get("vane_id", &"")) == vane_id:
+			return float(contribution.get("effective_authority_twr", 0.0))
+	return 0.0
 
 
 func _expect(condition: bool, description: String) -> void:

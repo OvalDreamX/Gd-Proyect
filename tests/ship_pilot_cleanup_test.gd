@@ -32,7 +32,7 @@ func _run_tests() -> void:
 	ship.request_pilot(first_pilot)
 	_expect(ship.is_pilot_ready(), "First player acquires the pilot claim")
 
-	var hull: Node3D = ship.get_node("Visuals/Hull") as Node3D
+	var hull: Node3D = ship.get_node("Visuals/Exterior") as Node3D
 	var interior: Node3D = ship.get_node("Visuals/CockpitInterior") as Node3D
 	hull.visible = false
 	interior.visible = true

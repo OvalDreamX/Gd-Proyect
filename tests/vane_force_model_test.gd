@@ -51,6 +51,32 @@ func _run_tests() -> void:
 	_expect_near(controller.get_group_nominal_authority_twr(&"main_rear"), 1.5, 0.0001, "Main rear vane retains its 1.5 TWR placeholder")
 
 	var force_scale: float = TEST_RATED_GROSS_MASS_KG * TEST_GRAVITY
+	# VaneRuntimeState intentionally starts at -10 C, where the production
+	# cold-strain model limits authority to 70%. Verify that clamp, then bring
+	# the test actuators to nominal operating temperature before asserting the
+	# rated 1.1 TWR collective force.
+	var cold_front: Dictionary = _calculate(controller, &"bottom_front", Vector3.UP, force_scale)
+	var cold_rear: Dictionary = _calculate(controller, &"bottom_rear", Vector3.UP, force_scale)
+	var cold_force: Vector3 = cold_front["net_force"] + cold_rear["net_force"]
+	_expect_near(
+		cold_force.y,
+		TEST_RATED_GROSS_MASS_KG * TEST_GRAVITY * 1.1 * 0.70,
+		0.1,
+		"Cold-start vanes retain the intended 70% authority clamp"
+	)
+	_set_all_vane_temperatures(controller, 60.0)
+	controller.set_vane_alignment_offset(&"bottom_front_left", Vector3(0.0, 0.0, 10.0))
+	var expected_misaligned_axis: Vector3 = (
+		Basis.from_euler(Vector3(0.0, 0.0, deg_to_rad(10.0))) * Vector3.UP
+	).normalized()
+	_expect_near_vector(
+		controller.get_vane_effective_thrust_axis_local(&"bottom_front_left"),
+		expected_misaligned_axis,
+		0.0001,
+		"Effective actuator axis includes mechanical alignment drift"
+	)
+	controller.reset_all_vanes()
+	_set_all_vane_temperatures(controller, 60.0)
 	var front: Dictionary = _calculate(controller, &"bottom_front", Vector3.UP, force_scale)
 	var rear: Dictionary = _calculate(controller, &"bottom_rear", Vector3.UP, force_scale)
 	var healthy_force: Vector3 = front["net_force"] + rear["net_force"]
@@ -83,6 +109,13 @@ func _run_tests() -> void:
 	_expect_near(failed_force.length(), 0.0, EPSILON, "Failed vane contributes zero force")
 
 	controller.reset_all_vanes()
+	_expect_near(
+		controller.get_vane_temperature(&"bottom_front_left"),
+		-10.0,
+		0.001,
+		"Reset restores the configured cold-start temperature"
+	)
+	_set_all_vane_temperatures(controller, 60.0)
 	front = _calculate(controller, &"bottom_front", Vector3.UP, force_scale)
 	rear = _calculate(controller, &"bottom_rear", Vector3.UP, force_scale)
 	var reset_force: Vector3 = front["net_force"] + rear["net_force"]
@@ -113,6 +146,11 @@ func _calculate(controller: Node, group_id: StringName, direction: Vector3, forc
 	)
 
 
+func _set_all_vane_temperatures(controller: Node, temperature_celsius: float) -> void:
+	for vane_id: StringName in controller.get_vane_ids():
+		controller.set_vane_temperature(vane_id, temperature_celsius)
+
+
 func _expect(condition: bool, description: String) -> void:
 	_checks += 1
 	if condition:
@@ -127,6 +165,10 @@ func _expect_equal(actual: int, expected: int, description: String) -> void:
 
 func _expect_near(actual: float, expected: float, tolerance: float, description: String) -> void:
 	_expect(absf(actual - expected) <= tolerance, "%s (actual %.5f, expected %.5f ± %.5f)" % [description, actual, expected, tolerance])
+
+
+func _expect_near_vector(actual: Vector3, expected: Vector3, tolerance: float, description: String) -> void:
+	_expect(actual.distance_to(expected) <= tolerance, "%s (actual %s, expected %s)" % [description, str(actual), str(expected)])
 
 
 func _fail(description: String) -> void:

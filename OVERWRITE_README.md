@@ -1,33 +1,50 @@
-# Ship Asset Pipeline — Phase 2A
+# Space Trucker 0.2.5F.7 — Rated Main-Thrust Wear Fixture Correction
 
-## Contents
+## Installation
 
-New files only; no existing project files are replaced:
+Extract this ZIP into the Godot project root and overwrite the listed files.
+This is a test-only correction for the 0.2.5F.5 geometry-based maneuver
+integration and the F5.6 rated-thrust fixture update. Do not delete `.godot`,
+`.gd.uid`, `.import`, project settings, or files not included in this archive.
 
-- `scripts/ship_model_loader.gd` — runtime GLB import using `GLTFDocument` / `GLTFState`.
-- `scripts/ship_model_validator.gd` — structural and naming validation.
-- `scripts/ship_anchor_registry.gd` — lookup for `ANCHOR_` nodes.
-- `tests/ship_model_pipeline_test.gd` — path, validation, registry and runtime GLB tests.
-- `tests/assets/ship_model_fixture.glb` — small generated fixture used by the runtime loader test.
-- `docs/SHIP_ASSET_PIPELINE.md` — canonical asset contract and complete authoring/export requirements.
-- `docs/BLENDER_SHIP_AUTHORING.md` — short Blender workflow reference.
+## Included files
 
-## Install
+- `tests/flight_force_control_test.gd` — resets the main-rear actuator's
+  integrity and temperature immediately before the nominal rated-force test.
+- `0.2.5.X.gd` — adds the F5.7 changelog entry.
+- `OVERWRITE_README.md` — this installation note.
 
-Extract this ZIP into the Godot project root and merge folders. This package adds files only. No existing scripts, scenes, Resources, JSON files, project settings or environment files need to be overwritten or deleted.
+## Root cause
 
-Keep all existing `.gd.uid` sidecars. Godot may generate UID sidecars for the new scripts on first project scan; keep those generated files in the repository.
+F5.6 restored `main_rear` to 60 C, but did not restore its integrity, despite
+claiming to do so in its README. Earlier calls to `apply_flight_control_forces()`
+advance the thermal/wear simulation using one default physics step when no
+explicit delta is supplied. The controller applies baseline operating wear
+while the field is online even if the vane has little or no active load.
 
-## Test
+The configured baseline wear rate is `0.000002` integrity per second. About
+seven 60 Hz steps yield an integrity loss of approximately `2.33e-7`. Applied
+to the nominal `809325 N` main-thrust rating, this predicts a reduction of about
+`0.189 N`, consistent with the reported `0.1875 N` shortfall after float
+rounding. The `1.50000` TWR fixture assertion used five decimal places in its
+reporting, so it did not reveal the tiny integrity loss.
 
-Run from the project root with Godot 4.7.2 Stable:
+F5.7 now explicitly restores both:
+
+1. `main_rear` integrity to `1.0` (100%).
+2. `main_rear` temperature to `60.0 C`.
+
+The existing authority and rated-force assertions are retained. This fixes the
+fixture rather than loosening its tolerance or changing production behavior.
+
+## Local verification
+
+Run from the project root in PowerShell:
 
 ```powershell
-godot --headless --path . --script res://tests/ship_model_pipeline_test.gd
+& $godot --headless --path . --script res://tests/flight_force_control_test.gd
 ```
 
-The runtime fixture test checks that the engine can parse a real GLB, generate its scene tree, preserve named anchors and validate the interaction node. This test must be run inside Godot; ZIP and binary-format checks alone are not a substitute.
-
-## Scope boundary
-
-Phase 2A creates a usable loader and freezes the Blender/GLB contract, but does not change the active ship scene. Phase 2B will integrate the loader with a model mount and visible placeholder fallback. Later subphases will wire actual anchors into cameras, vanes and ground-effect probes, then add animation playback and interaction hitboxes.
+The packaging environment does not have Godot 4.7.2, so runtime execution must
+be confirmed locally. The script patch is limited to fixture setup and one
+additional assertion; no production GDScript is modified.

@@ -4,16 +4,23 @@ const ModelLoader = preload("res://scripts/ship_model_loader.gd")
 const ModelValidator = preload("res://scripts/ship_model_validator.gd")
 const AnchorRegistry = preload("res://scripts/ship_anchor_registry.gd")
 
+var _failure_count: int = 0
+
 
 func _initialize() -> void:
 	_test_model_path_validation()
 	_test_model_tree_validation()
+	_test_non_renderable_model_rejection()
 	_test_duplicate_anchor_rejection()
 	_test_interaction_contract()
 	_test_anchor_registry()
 	_test_runtime_glb_fixture()
-	print("Ship model pipeline tests passed.")
-	quit(0)
+	if _failure_count > 0:
+		push_error("Ship model pipeline tests failed: %d assertion(s)." % _failure_count)
+		quit(1)
+	else:
+		print("Ship model pipeline tests passed.")
+		quit(0)
 
 
 func _test_model_path_validation() -> void:
@@ -33,6 +40,15 @@ func _test_model_tree_validation() -> void:
 	_assert(int(result.get("mesh_count", 0)) == 2, "Both model meshes should be discovered.")
 	_assert(int(result.get("interaction_count", 0)) == 1, "One interaction should be discovered.")
 	_assert(int(result.get("anchors", {}).size()) == 2, "Two anchors should be discovered.")
+	root.free()
+
+
+func _test_non_renderable_model_rejection() -> void:
+	var root := Node3D.new()
+	root.name = "SHIP_root"
+	var result: Dictionary = ModelValidator.validate_model_root(root)
+	_assert(not bool(result.get("valid", true)), "A model with no renderable mesh surfaces must fail validation.")
+	_assert(str(result.get("errors", [])).contains("renderable MeshInstance3D"), "The failure should explain that renderable geometry is required.")
 	root.free()
 
 
@@ -120,4 +136,5 @@ func _make_valid_model_tree() -> Node3D:
 
 func _assert(condition: bool, message: String) -> void:
 	if not condition:
+		_failure_count += 1
 		push_error("ShipModelPipeline test failed: " + message)

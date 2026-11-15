@@ -1,3 +1,11 @@
-CLEANUP: No existing files need to be deleted or replaced for Phase 2A.
+MANUAL CLEANUP REQUIRED (remove the obsolete, intentionally empty fixture):
 
-This package is additive. Preserve existing .gd.uid files and any UID sidecars Godot generates for the new scripts.
+- tests/assets/invalid_ship_model.glb
+- tests/assets/invalid_ship_model.glb.import (only if Godot generated it)
+- tests/assets/ship_model_invalid_fixture.json (no longer used)
+
+Also remove only the cached import files belonging to invalid_ship_model.glb from:
+- .godot/imported/invalid_ship_model.glb-*
+
+Do NOT delete the valid tests/assets/ship_model_fixture.glb or its import metadata.
+Do NOT delete any .gd.uid sidecars or the entire .godot folder.
