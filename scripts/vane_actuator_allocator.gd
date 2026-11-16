@@ -9,22 +9,14 @@ class_name VaneActuatorAllocator
 ## channels. This class does not read scene nodes or apply physics forces.
 ##
 ## Actuator input dictionary:
-## {
-##   "id": StringName,
-##   "position_local": Vector3,
-##   "axis_local": Vector3,
-##   "max_force_n": float,
-##   "control_weights": Dictionary,
-##   "enabled": bool (optional, default true)
-## }
+## {"id": StringName, "position_local": Vector3, "axis_local": Vector3,
+##  "max_force_n": float, "control_weights": Dictionary,
+##  "enabled": bool (optional, default true)}
 ##
 ## Positive FCC command signs preserve the existing contract:
 ## pitch -> +X torque, yaw -> -Y torque, roll -> -Z torque.
 ## Lift is +Y force; main_thrust is -Z force.
-##
-## Translation channels are ship-local force demands:
-## translate_x -> +X, translate_y -> +Y, translate_z -> +Z.
-## They are supported by the allocator but are not yet bound to pilot inputs.
+## Translation channels are ship-local: X/Y/Z force along +X/+Y/+Z.
 
 const CONTROL_CHANNELS: Array[StringName] = [
 	&"pitch", &"roll", &"yaw", &"lift", &"main_thrust",
@@ -97,7 +89,7 @@ static func allocate(
 			continue
 
 		var max_force_variant: Variant = actuator_variant.get("max_force_n", 0.0)
-		if (typeof(max_force_variant) != TYPE_INT and typeof(max_force_variant) != TYPE_FLOAT):
+		if typeof(max_force_variant) != TYPE_INT and typeof(max_force_variant) != TYPE_FLOAT:
 			validation_errors.append("Actuator %s has a non-numeric maximum force." % String(actuator_id))
 			continue
 		var max_force_n: float = float(max_force_variant)
@@ -177,10 +169,6 @@ static func allocate(
 		target_torque_local / (reference_force_newtons * characteristic_length_m)
 	)
 
-	var total_active_demand: float = 0.0
-	for channel: StringName in CONTROL_CHANNELS:
-		total_active_demand += absf(float(normalized_demands.get(channel, 0.0)))
-
 	var columns: Array[Dictionary] = []
 	var sorted_ids: Array[StringName] = []
 	for actuator_id_variant: Variant in actuators_by_id.keys():
@@ -194,14 +182,22 @@ static func allocate(
 
 		var weights: Dictionary = actuator["control_weights"]
 		var weighted_control_sum: float = 0.0
+		var eligible_active_demand: float = 0.0
 		for channel: StringName in CONTROL_CHANNELS:
 			var channel_demand: float = absf(float(normalized_demands.get(channel, 0.0)))
 			if channel_demand <= 0.000001:
 				continue
-			weighted_control_sum += channel_demand * float(weights.get(channel, 0))
-		if total_active_demand <= 0.000001:
+			var channel_weight: float = float(weights.get(channel, 0))
+			# A channel the actuator is not configured for must not dilute its
+			# recruitment priority on another active channel. This matters when,
+			# for example, a yaw-only side vane is allocated alongside main lift.
+			if channel_weight <= 0.0:
+				continue
+			eligible_active_demand += channel_demand
+			weighted_control_sum += channel_demand * channel_weight
+		if eligible_active_demand <= 0.000001:
 			continue
-		var effective_control_weight: float = weighted_control_sum / total_active_demand
+		var effective_control_weight: float = weighted_control_sum / eligible_active_demand
 		if effective_control_weight <= 0.000001:
 			continue
 
@@ -253,13 +249,6 @@ static func allocate(
 	var safe_iterations: int = clampi(iterations, 1, 512)
 	var performed_iterations: int = 0
 	var converged: bool = columns.is_empty()
-
-	# Cyclic coordinate descent refines only actuator-bound violations and the
-	# small residual introduced by projection. The dual warm start avoids the
-	# severe order bias and slow convergence of zero-start coordinate descent
-	# when multiple actuators have nearly identical geometry.
-	# The bounded objective remains:
-	# ||achieved_wrench - requested_wrench||^2 + sum(penalty_i * output_i^2).
 	for _iteration: int in range(safe_iterations):
 		performed_iterations += 1
 		var maximum_output_change: float = 0.0
@@ -298,7 +287,6 @@ static func allocate(
 	var achieved_torque_local := Vector3.ZERO
 	var actuator_outputs: Array[Dictionary] = []
 	var saturated_count: int = 0
-
 	for column_value: Dictionary in columns:
 		var output: float = float(column_value["output"])
 		var force_n: Vector3 = (
@@ -328,7 +316,6 @@ static func allocate(
 		(force_error / reference_force_newtons).length_squared()
 		+ (torque_error / (reference_force_newtons * characteristic_length_m)).length_squared()
 	)
-
 	return {
 		"success": true,
 		"errors": PackedStringArray(),
@@ -347,13 +334,6 @@ static func allocate(
 	}
 
 
-## Solves the regularized least-squares problem in wrench space rather than
-## actuator space. The system has a fixed six-dimensional matrix regardless of
-## how many actuators a ship defines:
-##   min ||A*x - b||^2 + sum(p_i*x_i^2)
-##   x = P^-1 * A^T * (I + A*P^-1*A^T)^-1 * b
-## The returned values are unconstrained; the caller clamps them and lets the
-## bounded coordinate refinement recover any residual from saturated actuators.
 static func _solve_unbounded_weighted_least_squares(
 		columns: Array[Dictionary],
 		target_force: Vector3,
@@ -362,7 +342,6 @@ static func _solve_unbounded_weighted_least_squares(
 	var empty_result := PackedFloat64Array()
 	if columns.is_empty():
 		return empty_result
-
 	var matrix: Array[PackedFloat64Array] = []
 	for row_index: int in range(WRENCH_COMPONENT_COUNT):
 		var row := PackedFloat64Array()
@@ -370,27 +349,17 @@ static func _solve_unbounded_weighted_least_squares(
 		for column_index: int in range(WRENCH_COMPONENT_COUNT):
 			row[column_index] = 1.0 if row_index == column_index else 0.0
 		matrix.append(row)
-
 	var wrench_columns: Array[PackedFloat64Array] = []
 	var rhs := PackedFloat64Array([
-		target_force.x,
-		target_force.y,
-		target_force.z,
-		target_torque.x,
-		target_torque.y,
-		target_torque.z,
+		target_force.x, target_force.y, target_force.z,
+		target_torque.x, target_torque.y, target_torque.z,
 	])
-
 	for column: Dictionary in columns:
 		var force_column: Vector3 = column["force_column"]
 		var torque_column: Vector3 = column["torque_column"]
 		var wrench := PackedFloat64Array([
-			force_column.x,
-			force_column.y,
-			force_column.z,
-			torque_column.x,
-			torque_column.y,
-			torque_column.z,
+			force_column.x, force_column.y, force_column.z,
+			torque_column.x, torque_column.y, torque_column.z,
 		])
 		var penalty: float = float(column["penalty"])
 		if not is_finite(penalty) or penalty <= 0.0:
@@ -402,11 +371,9 @@ static func _solve_unbounded_weighted_least_squares(
 			for column_index: int in range(WRENCH_COMPONENT_COUNT):
 				row[column_index] += wrench[row_index] * wrench[column_index] * inverse_penalty
 			matrix[row_index] = row
-
 	var dual_solution: PackedFloat64Array = _solve_linear_system_6x6(matrix, rhs)
 	if dual_solution.size() != WRENCH_COMPONENT_COUNT:
 		return empty_result
-
 	var outputs := PackedFloat64Array()
 	outputs.resize(columns.size())
 	for index: int in range(columns.size()):
@@ -422,9 +389,6 @@ static func _solve_unbounded_weighted_least_squares(
 	return outputs
 
 
-## Partial-pivot Gauss-Jordan elimination. The matrix is positive definite due
-## to its identity term, but pivoting still protects against scale differences
-## between the force and torque contributions.
 static func _solve_linear_system_6x6(
 		matrix: Array[PackedFloat64Array],
 		rhs: PackedFloat64Array
@@ -432,7 +396,6 @@ static func _solve_linear_system_6x6(
 	var empty_result := PackedFloat64Array()
 	if matrix.size() != WRENCH_COMPONENT_COUNT or rhs.size() != WRENCH_COMPONENT_COUNT:
 		return empty_result
-
 	var augmented: Array[PackedFloat64Array] = []
 	for row_index: int in range(WRENCH_COMPONENT_COUNT):
 		if matrix[row_index].size() != WRENCH_COMPONENT_COUNT:
@@ -443,7 +406,6 @@ static func _solve_linear_system_6x6(
 			row[column_index] = matrix[row_index][column_index]
 		row[WRENCH_COMPONENT_COUNT] = rhs[row_index]
 		augmented.append(row)
-
 	for pivot_index: int in range(WRENCH_COMPONENT_COUNT):
 		var best_row: int = pivot_index
 		var best_magnitude: float = absf(augmented[pivot_index][pivot_index])
@@ -458,13 +420,11 @@ static func _solve_linear_system_6x6(
 			var swap_row: PackedFloat64Array = augmented[pivot_index]
 			augmented[pivot_index] = augmented[best_row]
 			augmented[best_row] = swap_row
-
 		var pivot_value: float = augmented[pivot_index][pivot_index]
 		var pivot_row: PackedFloat64Array = augmented[pivot_index]
 		for column_index: int in range(pivot_index, WRENCH_COMPONENT_COUNT + 1):
 			pivot_row[column_index] /= pivot_value
 		augmented[pivot_index] = pivot_row
-
 		for row_index: int in range(WRENCH_COMPONENT_COUNT):
 			if row_index == pivot_index:
 				continue
@@ -475,7 +435,6 @@ static func _solve_linear_system_6x6(
 			for column_index: int in range(pivot_index, WRENCH_COMPONENT_COUNT + 1):
 				elimination_row[column_index] -= factor * pivot_row[column_index]
 			augmented[row_index] = elimination_row
-
 	var solution := PackedFloat64Array()
 	solution.resize(WRENCH_COMPONENT_COUNT)
 	for row_index: int in range(WRENCH_COMPONENT_COUNT):

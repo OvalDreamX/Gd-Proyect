@@ -3,9 +3,9 @@ class_name RepulsorliftSystem
 
 const VANE_ACTUATOR_ALLOCATOR_SCRIPT = preload("res://scripts/vane_actuator_allocator.gd")
 
-## Owns all ship-force submission. Main propulsion remains on the established
-## field-vector path; pitch/roll use geometry-based actuator allocation, while
-## yaw retains its legacy side-group path until those axes are redesigned.
+## Owns all ship-force submission. Main-vector and maneuver demands are solved
+## together in one bounded wrench allocation, producing one scalar output per
+## physical actuator and one force application at each authored anchor.
 
 @export_category("Main field vector")
 ## TWR values in vane resources are rated against maximum design gross mass
@@ -15,7 +15,8 @@ const VANE_ACTUATOR_ALLOCATOR_SCRIPT = preload("res://scripts/vane_actuator_allo
 
 @export_category("Maneuver authority")
 ## Requested share of the installed geometry-derived pitch/roll torque
-## capacity at full FCC deflection. This remains a control-feel tuning value.
+## capacity at full FCC deflection. Yaw preserves its existing rated side-vane
+## authority and is not scaled by this percentage.
 @export_range(0.0, 0.25, 0.005) var maneuver_authority_fraction: float = 0.05
 ## Maneuvering keeps a baseline while the field is online. Unused main-vector
 ## allocation can add up to this modest reserve at zero main-vector output.
@@ -24,11 +25,9 @@ const VANE_ACTUATOR_ALLOCATOR_SCRIPT = preload("res://scripts/vane_actuator_allo
 @export_category("Debug vectors")
 @export_range(1.0, 12.0, 0.5) var debug_arrow_length_per_twr_m: float = 4.0
 
-const BOTTOM_FRONT_GROUP: StringName = &"bottom_front"
-const BOTTOM_REAR_GROUP: StringName = &"bottom_rear"
-const MAIN_REAR_GROUP: StringName = &"main_rear"
-const SIDE_LEFT_GROUP: StringName = &"side_left"
-const SIDE_RIGHT_GROUP: StringName = &"side_right"
+## Tight numerical regularization keeps combined saturated-channel residuals
+## below the existing 0.01 N maneuver-pair tolerance while retaining a unique solve.
+const MAIN_VECTOR_ALLOCATOR_REGULARIZATION: float = 0.000000001
 
 const MINIMUM_MASS_KG: float = 0.0001
 const MINIMUM_FORCE_SQUARED: float = 0.000001
@@ -61,6 +60,7 @@ var _last_maximum_lift_twr: float = 0.0
 var _last_force_vectors: Array[Dictionary] = []
 var _last_vane_contributions: Array[Dictionary] = []
 var _last_maneuver_allocation: Dictionary = {}
+var _last_main_vector_allocation: Dictionary = {}
 
 
 func _ready() -> void:
@@ -119,34 +119,25 @@ func apply_flight_control_forces(
 		return
 
 	var body_basis: Basis = _ship.global_basis.orthonormalized()
-	var center_of_mass_world: Vector3 = _ship.global_transform * _ship.center_of_mass
 	_last_gravity_magnitude = _get_gravity_vector_world().length()
 	var reference_force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
-	var main_vector_force_scale: float = reference_force_newtons_per_twr * _last_power_output
 	# Maneuvering remains available whenever the field is ONLINE. Reducing the
 	# main-vector allocation releases a small amount of capacity to the vanes.
 	_last_maneuver_power_multiplier = 1.0 + (1.0 - _last_power_output) * clampf(maneuver_boost_at_zero_main_power, 0.0, 0.35)
-	var maneuver_force_scale: float = reference_force_newtons_per_twr * _last_maneuver_power_multiplier
 	_last_vane_redistribution_fraction = clampf(vane_redistribution_fraction, 0.0, 1.0)
 	_last_maximum_vane_output_multiplier = clampf(maximum_vane_output_multiplier, 1.0, 1.5)
-	_apply_main_vector(body_basis, center_of_mass_world, main_vector_force_scale)
-	_apply_maneuver_allocator(
+	_apply_unified_actuator_allocator(
 		body_basis,
 		reference_force_newtons_per_twr,
 		_last_vane_redistribution_fraction,
 		_last_maximum_vane_output_multiplier
 	)
-	# The prototype side-vane positions/axis metadata are not yet sufficient for
-	# a geometry-correct yaw couple. Keep its known-good group mapping until those
-	# model anchors are updated; the allocator already supports yaw mathematically.
-	_apply_yaw_pair(body_basis, maneuver_force_scale, _last_vane_redistribution_fraction, _last_maximum_vane_output_multiplier)
 
 	if _last_gravity_magnitude > 0.0001:
 		var local_up: Vector3 = -_get_gravity_vector_world().normalized()
 		_last_vertical_twr = maxf(_last_total_force.dot(local_up), 0.0) / (_ship.mass * _last_gravity_magnitude)
 
-	# Thermal load combines the current main-vector allocation with the actual
-	# per-vane force contributions produced by the maneuver allocator.
+	# Thermal loads are derived from the measured unified actuator outputs.
 	_step_vane_thermal(thermal_delta, true)
 
 	_update_force_debug()
@@ -163,12 +154,24 @@ func _step_vane_thermal(delta: float, field_online: bool) -> void:
 	var loads: Dictionary = {}
 	if field_online:
 		var force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
-		loads = _vane_controller.calculate_thermal_loads(
-			_last_power_output,
-			_last_vector_angle_degrees,
-			_last_vane_contributions,
-			force_newtons_per_twr
-		)
+		# Thermal demand is derived from the actual unified actuator forces.
+		# No group IDs or assumed propulsion role are involved; every physical
+		# actuator contributes exactly once to its own heat load.
+		for vane_id: StringName in _vane_controller.get_vane_ids():
+			var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
+			if not is_instance_valid(definition) or not definition.enabled:
+				loads[vane_id] = 0.0
+				continue
+			var rated_force: float = definition.nominal_authority_twr * force_newtons_per_twr
+			loads[vane_id] = 0.0
+			if rated_force > MINIMUM_FORCE_SQUARED:
+				for contribution_value: Dictionary in _last_vane_contributions:
+					var contribution: Dictionary = contribution_value
+					if StringName(contribution.get("vane_id", &"")) != vane_id:
+						continue
+					var force_world: Vector3 = contribution.get("force_world", Vector3.ZERO)
+					loads[vane_id] = float(loads[vane_id]) + force_world.length() / rated_force
+			loads[vane_id] = clampf(float(loads[vane_id]), 0.0, 1.5)
 	_vane_controller.update_thermal_simulation(delta, ambient_temp, field_online, loads)
 
 
@@ -204,188 +207,298 @@ func _reset_frame_output(
 		"eligible_actuator_count": 0,
 		"normalized_error": 0.0,
 	}
+	_last_main_vector_allocation = _empty_main_vector_allocation()
 	_last_maximum_lift_twr = _get_maximum_lift_twr_at_current_mass()
 
 
-func _apply_main_vector(body_basis: Basis, center_of_mass_world: Vector3, force_newtons_per_twr: float) -> void:
-	var local_direction: Vector3 = main_vector_direction_local(_last_vector_angle_degrees)
-	_last_main_direction_world = (body_basis * local_direction).normalized()
-
-	# Cross-fade between the rear/main vane's forward authority and the four
-	# bottom vanes' collective lift authority. Past vertical, retain the bottom
-	# array's authority while the vector continues into the braking direction.
-	var lift_blend: float = clampf(_last_vector_angle_degrees / 90.0, 0.0, 1.0)
-	var propulsion_twr: float = _vane_controller.get_group_effective_authority_twr(MAIN_REAR_GROUP)
-	var lift_twr: float = _get_bottom_effective_authority_twr()
-	var available_main_twr: float = lerpf(propulsion_twr, lift_twr, lift_blend)
-	_last_main_force = _last_main_direction_world * force_newtons_per_twr * available_main_twr
-
-	if _last_main_force.length_squared() <= MINIMUM_FORCE_SQUARED:
-		return
-
-	# The ship-wide field resultant is applied at the fixed hull reference datum
-	# (the rigid-body origin), not magically through the moving COM. An offset
-	# cargo COM therefore creates a real lever arm and attitude moment. With the
-	# empty ship's COM at the origin, this remains a zero-moment main resultant.
-	var application_point_world: Vector3 = _ship.global_position
-	_ship.apply_force(_last_main_force, Vector3.ZERO)
-	var main_torque: Vector3 = (application_point_world - center_of_mass_world).cross(_last_main_force)
-	_last_total_force += _last_main_force
-	_last_total_torque += main_torque
-	_last_force_vectors.append({
-		"name": "MAIN FIELD VECTOR",
-		"kind": "main",
-		"force_world": _last_main_force,
-		"application_point_world": application_point_world,
-	})
-
-
-func _apply_maneuver_allocator(
+func _apply_unified_actuator_allocator(
 		body_basis: Basis,
 		reference_force_newtons: float,
 		redistribution_fraction: float,
 		maximum_output_multiplier: float
 ) -> void:
+	var local_direction: Vector3 = main_vector_direction_local(_last_vector_angle_degrees)
+	_last_main_direction_world = (body_basis * local_direction).normalized()
+	if reference_force_newtons <= MINIMUM_FORCE_SQUARED:
+		return
+
+	var lift_capacity_twr: float = _get_main_vector_channel_capacity_twr(&"lift", Vector3.UP)
+	var main_capacity_twr: float = _get_main_vector_channel_capacity_twr(&"main_thrust", Vector3.BACK)
+	var lift_blend: float = clampf(_last_vector_angle_degrees / 90.0, 0.0, 1.0)
+	var available_main_twr: float = lerpf(main_capacity_twr, lift_capacity_twr, lift_blend)
+	var maximum_reference_twr: float = maxf(lift_capacity_twr, main_capacity_twr)
+	if maximum_reference_twr <= MINIMUM_FORCE_SQUARED:
+		return
+
 	var center_of_mass_local: Vector3 = _ship.center_of_mass
-	var active_channels: Array[StringName] = []
-	if absf(_last_pitch_command) > 0.0001:
-		active_channels.append(&"pitch")
-	if absf(_last_roll_command) > 0.0001:
-		active_channels.append(&"roll")
-
-	var runtime_entries: Array[Dictionary] = []
-	var characteristic_length_m: float = 1.0
-	var total_damage_shortfall_twr: float = 0.0
-	var total_healthy_headroom_twr: float = 0.0
+	var characteristic_length_m: float = maxf(1.0, center_of_mass_local.length())
+	var actuator_records: Array[Dictionary] = []
 	var safe_maximum_multiplier: float = clampf(maximum_output_multiplier, 1.0, 1.5)
+	var safe_redistribution_fraction: float = clampf(redistribution_fraction, 0.0, 1.0)
+	var maneuver_multiplier: float = _last_maneuver_power_multiplier
+	var allocator_reference_force: float = reference_force_newtons * maximum_reference_twr
+	var target_main_force_local: Vector3 = Vector3.ZERO
+	if _last_power_output > 0.000001 and available_main_twr > MINIMUM_FORCE_SQUARED:
+		# Pitch/roll authority is now drawn from the same bounded actuator
+		# outputs as propulsion. Reserve the configured maneuver share rather
+		# than requesting more force than the physical vanes can supply.
+		var pitch_roll_reserve: float = clampf(
+			(absf(_last_pitch_command) + absf(_last_roll_command))
+			* maneuver_authority_fraction,
+			0.0,
+			0.25
+		)
+		var propulsion_share: float = 1.0 - pitch_roll_reserve
+		target_main_force_local = local_direction * (
+			reference_force_newtons * available_main_twr * _last_power_output * propulsion_share
+		)
+	var main_datum_torque_local: Vector3 = (Vector3.ZERO - center_of_mass_local).cross(target_main_force_local)
+	var active_channels: Array[StringName] = []
+	if absf(target_main_force_local.y) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"lift")
+	if absf(target_main_force_local.z) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"main_thrust")
+	if absf(_last_pitch_command) > 0.0001 or absf(main_datum_torque_local.x) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"pitch")
+	if absf(_last_roll_command) > 0.0001 or absf(main_datum_torque_local.z) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"roll")
+	if absf(_last_yaw_command) > 0.0001 or absf(main_datum_torque_local.y) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"yaw")
 
-	# Discover every configured actuator by stable ID. Eligibility comes from
-	# its channel weights; there is no fixed front/rear/left/right slot count.
+	# Build one actuator record per stable vane ID. The same scalar output limit
+	# covers propulsion and maneuvering; it cannot be spent independently by
+	# two allocator passes.
 	for vane_id: StringName in _vane_controller.get_vane_ids():
 		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
 		if not is_instance_valid(definition) or not definition.enabled:
 			continue
-		var eligible_for_active_channel: bool = false
-		for channel: StringName in active_channels:
-			if definition.get_control_weight(channel) > 0:
-				eligible_for_active_channel = true
-				break
-		if not eligible_for_active_channel:
+		var effective_authority_twr: float = _vane_controller.get_vane_effective_authority_twr(vane_id)
+		var axis_local: Vector3 = _vane_controller.get_vane_effective_thrust_axis_local(vane_id)
+		if effective_authority_twr <= MINIMUM_FORCE_SQUARED or axis_local.length_squared() <= MINIMUM_FORCE_SQUARED:
 			continue
-
-		var base_authority_twr: float = _vane_controller.get_vane_effective_authority_twr(vane_id)
-		var spare_headroom_twr: float = 0.0
+		var has_active_weight: bool = false
+		for active_channel: StringName in active_channels:
+			if definition.get_control_weight(active_channel) > 0:
+				has_active_weight = true
+				break
+		if not has_active_weight:
+			continue
+		var nominal: float = definition.nominal_authority_twr
+		var spare: float = 0.0
 		if _vane_controller.can_vane_receive_redistributed_authority(vane_id):
-			spare_headroom_twr = definition.nominal_authority_twr * (safe_maximum_multiplier - 1.0)
-		total_damage_shortfall_twr += maxf(definition.nominal_authority_twr - base_authority_twr, 0.0)
-		total_healthy_headroom_twr += spare_headroom_twr
+			spare = nominal * (safe_maximum_multiplier - 1.0)
 		characteristic_length_m = maxf(
 			characteristic_length_m,
 			(definition.local_position - center_of_mass_local).length()
 		)
-		runtime_entries.append({
-			"vane_id": vane_id,
+		actuator_records.append({
+			"id": vane_id,
 			"definition": definition,
-			"base_authority_twr": base_authority_twr,
-			"spare_headroom_twr": spare_headroom_twr,
+			"base_authority_twr": effective_authority_twr,
+			"spare_headroom_twr": spare,
+			"axis_local": axis_local.normalized(),
 		})
 
-	var redistribution_budget_twr: float = minf(
-		total_damage_shortfall_twr * clampf(redistribution_fraction, 0.0, 1.0),
-		total_healthy_headroom_twr
-	)
+	if actuator_records.is_empty() or active_channels.is_empty():
+		return
+
+	# Redistribute damage within each active control channel, never across
+	# unrelated actuator roles. A yaw-only deficit must not consume lift or
+	# pitch/roll headroom. When one actuator belongs to several active channels,
+	# it receives the greatest single channel share, not the sum: its physical
+	# scalar bound is still shared and cannot be budgeted more than once.
+	var redistributed_by_vane: Dictionary = {}
+	for record_value: Dictionary in actuator_records:
+		var record: Dictionary = record_value
+		redistributed_by_vane[record["id"]] = 0.0
+	for active_channel: StringName in active_channels:
+		var channel_damage_shortfall_twr: float = 0.0
+		var channel_healthy_headroom_twr: float = 0.0
+		for record_value: Dictionary in actuator_records:
+			var record: Dictionary = record_value
+			var definition: VaneDefinition = record["definition"]
+			if definition.get_control_weight(active_channel) <= 0:
+				continue
+			channel_damage_shortfall_twr += maxf(
+				definition.nominal_authority_twr - float(record["base_authority_twr"]),
+				0.0
+			)
+			channel_healthy_headroom_twr += float(record["spare_headroom_twr"])
+		if channel_healthy_headroom_twr <= MINIMUM_FORCE_SQUARED:
+			continue
+		var channel_redistribution_budget_twr: float = minf(
+			channel_damage_shortfall_twr * safe_redistribution_fraction,
+			channel_healthy_headroom_twr
+		)
+		if channel_redistribution_budget_twr <= MINIMUM_FORCE_SQUARED:
+			continue
+		for record_value: Dictionary in actuator_records:
+			var record: Dictionary = record_value
+			var definition: VaneDefinition = record["definition"]
+			if definition.get_control_weight(active_channel) <= 0:
+				continue
+			var spare: float = float(record["spare_headroom_twr"])
+			if spare <= 0.0:
+				continue
+			var share: float = channel_redistribution_budget_twr * spare / channel_healthy_headroom_twr
+			var vane_id: StringName = record["id"]
+			redistributed_by_vane[vane_id] = maxf(float(redistributed_by_vane[vane_id]), share)
+
 	var actuators: Array[Dictionary] = []
 	var pitch_capacity_torque_nm: float = 0.0
 	var roll_capacity_torque_nm: float = 0.0
-
-	for entry_value: Dictionary in runtime_entries:
-		var entry: Dictionary = entry_value
-		var vane_id: StringName = StringName(str(entry["vane_id"]))
-		var definition: VaneDefinition = entry["definition"]
-		var spare_headroom_twr: float = float(entry["spare_headroom_twr"])
-		var redistributed_authority_twr: float = 0.0
-		if total_healthy_headroom_twr > 0.000001 and spare_headroom_twr > 0.0:
-			redistributed_authority_twr = (
-				redistribution_budget_twr * spare_headroom_twr / total_healthy_headroom_twr
-			)
-		var effective_authority_twr: float = (
-			float(entry["base_authority_twr"]) + redistributed_authority_twr
-		)
-		var max_force_n: float = (
-			effective_authority_twr
-			* reference_force_newtons
-			* _last_maneuver_power_multiplier
-		)
-		var actuator_axis: Vector3 = _vane_controller.get_vane_effective_thrust_axis_local(vane_id)
-		if actuator_axis.length_squared() <= MINIMUM_FORCE_SQUARED:
-			continue
-		var lever_arm_local: Vector3 = definition.local_position - center_of_mass_local
-		var maximum_torque_local: Vector3 = lever_arm_local.cross(actuator_axis) * max_force_n
+	var yaw_capacity_torque_nm: float = 0.0
+	for record_value: Dictionary in actuator_records:
+		var record: Dictionary = record_value
+		var definition: VaneDefinition = record["definition"]
+		var base_authority: float = float(record["base_authority_twr"])
+		var redistributed: float = float(redistributed_by_vane.get(record["id"], 0.0))
+		var effective_bound_twr: float = base_authority + redistributed
+		var max_force_n: float = effective_bound_twr * reference_force_newtons * maneuver_multiplier
+		var axis_local: Vector3 = record["axis_local"]
+		var lever_arm: Vector3 = definition.local_position - center_of_mass_local
+		var max_torque: Vector3 = lever_arm.cross(axis_local) * max_force_n
 		if definition.get_control_weight(&"pitch") > 0:
-			pitch_capacity_torque_nm += absf(maximum_torque_local.x)
+			pitch_capacity_torque_nm += absf(max_torque.x)
 		if definition.get_control_weight(&"roll") > 0:
-			roll_capacity_torque_nm += absf(maximum_torque_local.z)
+			roll_capacity_torque_nm += absf(max_torque.z)
+		if definition.get_control_weight(&"yaw") > 0:
+			yaw_capacity_torque_nm += absf(max_torque.y)
 		actuators.append({
-			"id": StringName(str(entry["vane_id"])),
+			"id": record["id"],
 			"position_local": definition.local_position,
-			"axis_local": actuator_axis,
+			"axis_local": axis_local,
 			"max_force_n": max_force_n,
 			"control_weights": definition.control_weights,
-			"enabled": definition.enabled,
+			"enabled": true,
 		})
 
-	var normalized_pitch_demand: float = 0.0
-	var normalized_roll_demand: float = 0.0
-	if reference_force_newtons > MINIMUM_FORCE_SQUARED and characteristic_length_m > 0.0:
-		var wrench_reference: float = reference_force_newtons * characteristic_length_m
-		normalized_pitch_demand = (
-			_last_pitch_command * maneuver_authority_fraction
-			* pitch_capacity_torque_nm / wrench_reference
-		)
-		normalized_roll_demand = (
-			_last_roll_command * maneuver_authority_fraction
-			* roll_capacity_torque_nm / wrench_reference
-		)
+	# Preserve the established maneuver response in physical torque units, then
+	# add the torque required for the main resultant to act through the hull
+	# datum rather than through the displaced current center of mass.
+	var maneuver_torque_local := Vector3(
+		_last_pitch_command * maneuver_authority_fraction * pitch_capacity_torque_nm,
+		-_last_yaw_command * yaw_capacity_torque_nm,
+		-_last_roll_command * maneuver_authority_fraction * roll_capacity_torque_nm
+	)
+	var target_torque_local: Vector3 = main_datum_torque_local + maneuver_torque_local
+	var wrench_reference: float = allocator_reference_force * characteristic_length_m
+	if wrench_reference <= MINIMUM_FORCE_SQUARED:
+		return
 
 	var demands: Dictionary = {
-		"pitch": clampf(normalized_pitch_demand, -1.0, 1.0),
-		"roll": clampf(normalized_roll_demand, -1.0, 1.0),
+		"lift": target_main_force_local.y / allocator_reference_force,
+		"main_thrust": -target_main_force_local.z / allocator_reference_force,
+		"pitch": target_torque_local.x / wrench_reference,
+		"yaw": -target_torque_local.y / wrench_reference,
+		"roll": -target_torque_local.z / wrench_reference,
 	}
 	var allocation: Dictionary = VANE_ACTUATOR_ALLOCATOR_SCRIPT.allocate(
 		actuators,
 		demands,
 		center_of_mass_local,
-		reference_force_newtons,
-		characteristic_length_m
+		allocator_reference_force,
+		characteristic_length_m,
+		128,
+		MAIN_VECTOR_ALLOCATOR_REGULARIZATION
 	)
-	_last_maneuver_allocation = allocation
+	_last_main_vector_allocation = allocation
 	if not bool(allocation.get("success", false)):
+		_last_maneuver_allocation = allocation.duplicate(true)
 		return
 
-	var maneuver_force_kind: String = "maneuver"
-	if active_channels.size() == 1:
-		maneuver_force_kind = String(active_channels[0])
+	# Preserve the historical maneuver-allocation view for HUD/tests while
+	# exposing the complete shared solve through actuator_allocator and
+	# main_vector_allocator. The output list remains the full unified list so
+	# each actuator's one physical bound is inspectable from either view.
+	_last_maneuver_allocation = allocation.duplicate(true)
+	_last_maneuver_allocation["unified_eligible_actuator_count"] = int(
+		allocation.get("eligible_actuator_count", 0)
+	)
+	_last_maneuver_allocation["eligible_actuator_count"] = _count_maneuver_eligible_outputs(
+		allocation.get("actuator_outputs", [])
+	)
+	_last_maneuver_allocation["unified"] = true
 
-	for output_entry: Dictionary in allocation.get("actuator_outputs", []):
+	var achieved_force_local: Vector3 = allocation.get("achieved_force_local_n", Vector3.ZERO)
+	_last_main_force = body_basis * target_main_force_local
+	_last_total_force = body_basis * achieved_force_local
+	var achieved_torque_local: Vector3 = allocation.get("achieved_torque_local_nm", Vector3.ZERO)
+	_last_total_torque = body_basis * achieved_torque_local
+
+	# When propulsion and pilot control overlap, derive an equivalent component
+	# decomposition for force-vector telemetry: a main resultant at the hull
+	# datum plus maneuver differential forces at vane anchors. This reference
+	# solve is diagnostic only; it never submits forces or creates another
+	# physical output budget. The ship receives only the unified outputs below.
+	var maneuver_input_active: bool = (
+		absf(_last_pitch_command) > 0.0001
+		or absf(_last_roll_command) > 0.0001
+		or absf(_last_yaw_command) > 0.0001
+	)
+	var main_reference_outputs: Dictionary = {}
+	var main_reference_valid: bool = target_main_force_local.length_squared() <= MINIMUM_FORCE_SQUARED
+	if maneuver_input_active and target_main_force_local.length_squared() > MINIMUM_FORCE_SQUARED:
+		var main_reference_demands: Dictionary = {
+			"lift": target_main_force_local.y / allocator_reference_force,
+			"main_thrust": -target_main_force_local.z / allocator_reference_force,
+			"pitch": main_datum_torque_local.x / wrench_reference,
+			"yaw": -main_datum_torque_local.y / wrench_reference,
+			"roll": -main_datum_torque_local.z / wrench_reference,
+		}
+		var main_reference_allocation: Dictionary = VANE_ACTUATOR_ALLOCATOR_SCRIPT.allocate(
+			actuators,
+			main_reference_demands,
+			center_of_mass_local,
+			allocator_reference_force,
+			characteristic_length_m,
+			128,
+			MAIN_VECTOR_ALLOCATOR_REGULARIZATION
+		)
+		if bool(main_reference_allocation.get("success", false)):
+			var reference_force_error: Vector3 = main_reference_allocation.get(
+				"force_residual_local_n", Vector3.ZERO
+			)
+			var reference_torque_error: Vector3 = main_reference_allocation.get(
+				"torque_residual_local_nm", Vector3.ZERO
+			)
+			var force_tolerance: float = maxf(0.5, allocator_reference_force * 0.000001)
+			var torque_tolerance: float = maxf(0.5, wrench_reference * 0.000001)
+			main_reference_valid = (
+				reference_force_error.length() <= force_tolerance
+				and reference_torque_error.length() <= torque_tolerance
+			)
+			if main_reference_valid:
+				for reference_output_value: Dictionary in main_reference_allocation.get("actuator_outputs", []):
+					var reference_output: Dictionary = reference_output_value
+					main_reference_outputs[StringName(str(reference_output.get("id", "")))] = float(
+						reference_output.get("output", 0.0)
+					)
+
+	if target_main_force_local.length_squared() > MINIMUM_FORCE_SQUARED:
+		if not maneuver_input_active or main_reference_valid:
+			_last_force_vectors.append({
+				"name": "MAIN FIELD VECTOR",
+				"kind": "main",
+				"force_world": body_basis * target_main_force_local,
+				"application_point_world": _ship.global_position,
+				"equivalent_resultant": true,
+			})
+
+	for output_value: Dictionary in allocation.get("actuator_outputs", []):
+		var output_entry: Dictionary = output_value
 		var output_id: StringName = StringName(str(output_entry.get("id", "")))
 		var definition: VaneDefinition = _vane_controller.get_vane_definition(output_id)
 		if not is_instance_valid(definition):
 			continue
 		var force_local: Vector3 = output_entry.get("force_local_n", Vector3.ZERO)
-		if force_local.length_squared() <= MINIMUM_FORCE_SQUARED:
-			continue
-
 		var force_world: Vector3 = body_basis * force_local
 		var application_offset_world: Vector3 = body_basis * definition.local_position
 		var application_point_world: Vector3 = _ship.global_position + application_offset_world
-		var torque_local: Vector3 = (
-			definition.local_position - center_of_mass_local
-		).cross(force_local)
+		var torque_local: Vector3 = (definition.local_position - center_of_mass_local).cross(force_local)
 		var torque_world: Vector3 = body_basis * torque_local
 		_ship.apply_force(force_world, application_offset_world)
-		_last_total_force += force_world
-		_last_total_torque += torque_world
-		_last_vane_contributions.append({
+		var contribution: Dictionary = {
 			"vane_id": output_id,
 			"display_name": definition.display_name,
 			"group_id": definition.group_id,
@@ -393,110 +506,145 @@ func _apply_maneuver_allocator(
 			"torque_world": torque_world,
 			"application_point_world": application_point_world,
 			"lever_arm_world": body_basis * (definition.local_position - center_of_mass_local),
-			"effective_authority_twr": (
-				float(output_entry.get("max_force_n", 0.0))
-				/ maxf(reference_force_newtons * _last_maneuver_power_multiplier, 0.0001)
-			),
+			"effective_authority_twr": float(output_entry.get("max_force_n", 0.0)) / maxf(reference_force_newtons * maneuver_multiplier, 0.0001),
 			"allocation_weight": float(output_entry.get("control_weight", 0.0)),
 			"actuator_output": float(output_entry.get("output", 0.0)),
-		})
+		}
+		_last_vane_contributions.append(contribution)
+		if not maneuver_input_active:
+			continue
+		var effective_axis_local: Vector3 = _vane_controller.get_vane_effective_thrust_axis_local(output_id)
+		var total_output: float = float(output_entry.get("output", 0.0))
+		var main_output: float = float(main_reference_outputs.get(output_id, 0.0)) if main_reference_valid else 0.0
+		var maneuver_output_delta: float = total_output - main_output
+		var maneuver_force_local: Vector3 = (
+			effective_axis_local * float(output_entry.get("max_force_n", 0.0)) * maneuver_output_delta
+		)
+		if maneuver_force_local.length_squared() <= MINIMUM_FORCE_SQUARED:
+			continue
+		var maneuver_force_world: Vector3 = body_basis * maneuver_force_local
+		var has_yaw: bool = definition.get_control_weight(&"yaw") > 0 and absf(_last_yaw_command) > 0.0001
+		var has_pitch: bool = definition.get_control_weight(&"pitch") > 0 and absf(_last_pitch_command) > 0.0001
+		var has_roll: bool = definition.get_control_weight(&"roll") > 0 and absf(_last_roll_command) > 0.0001
+		var active_axis_count: int = (1 if has_yaw else 0) + (1 if has_pitch else 0) + (1 if has_roll else 0)
+		var force_kind: String = "maneuver"
+		if target_main_force_local.length_squared() > MINIMUM_FORCE_SQUARED and not main_reference_valid:
+			force_kind = "combined"
+		elif active_axis_count == 1:
+			if has_pitch:
+				force_kind = "pitch"
+			elif has_roll:
+				force_kind = "roll"
+			else:
+				force_kind = "yaw"
+		elif active_axis_count == 0:
+			force_kind = "combined"
 		_last_force_vectors.append({
-			"name": "MANEUVER %s" % String(output_id),
-			"kind": maneuver_force_kind,
-			"force_world": force_world,
+			"name": "%s %s" % [force_kind.to_upper(), String(output_id)],
+			"kind": force_kind,
+			"force_world": maneuver_force_world,
 			"application_point_world": application_point_world,
+			"equivalent_component": main_reference_valid,
+			"actuator_output_delta": maneuver_output_delta,
 		})
 
-
-func _apply_yaw_pair(body_basis: Basis, force_newtons_per_twr: float, redistribution_fraction: float, maximum_output_multiplier: float) -> void:
-	if absf(_last_yaw_command) <= 0.0001:
-		return
-	var force_scale: float = force_newtons_per_twr * absf(_last_yaw_command)
-	# Positive A/D command is yaw-right: the left side pushes forward (-Z),
-	# while the right side pushes aft (+Z). The pair cancels translation and
-	# creates a moment around the ship's vertical axis.
-	var left_direction: Vector3 = body_basis * Vector3.FORWARD * signf(_last_yaw_command)
-	var right_direction: Vector3 = -left_direction
-
-	_apply_group_force("YAW LEFT", "yaw", SIDE_LEFT_GROUP, left_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
-	_apply_group_force("YAW RIGHT", "yaw", SIDE_RIGHT_GROUP, right_direction, force_scale, redistribution_fraction, maximum_output_multiplier)
+	# The solver's achieved wrench is also the physical force/torque telemetry.
+	# Force-vector telemetry uses an equivalent main-resultant + maneuver-delta
+	# decomposition when that baseline is reachable; actual per-vane applied
+	# forces remain available separately in lift_vane_contributions.
+	_last_main_vector_allocation["unified"] = true
+	_last_maneuver_allocation["unified"] = true
 
 
-func _apply_group_force(
-		force_name: String,
-		force_kind: String,
-		group_id: StringName,
-		force_direction_world: Vector3,
-		force_scale: float,
-		redistribution_fraction: float,
-		maximum_output_multiplier: float
-) -> void:
-	var resultant: Dictionary = _vane_controller.calculate_group_resultant(
-		group_id,
-		force_direction_world,
-		force_scale,
-		_ship.global_transform,
-		_ship.center_of_mass,
-		redistribution_fraction,
-		maximum_output_multiplier
-	)
-	_apply_resultant(force_name, force_kind, resultant)
+func _get_main_vector_channel_capacity_twr(channel: StringName, reference_axis_local: Vector3) -> float:
+	var total_capacity_twr: float = 0.0
+	for vane_id: StringName in _vane_controller.get_vane_ids():
+		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
+		if not is_instance_valid(definition) or not definition.enabled or definition.get_control_weight(channel) <= 0:
+			continue
+		var effective_axis: Vector3 = _vane_controller.get_vane_effective_thrust_axis_local(vane_id)
+		if effective_axis.length_squared() <= MINIMUM_FORCE_SQUARED:
+			continue
+		total_capacity_twr += (
+			_vane_controller.get_vane_effective_authority_twr(vane_id)
+			* absf(effective_axis.normalized().dot(reference_axis_local))
+		)
+	return total_capacity_twr
 
 
-func _apply_resultant(force_name: String, force_kind: String, resultant: Dictionary) -> void:
-	var force_world: Vector3 = resultant.get("net_force", Vector3.ZERO)
-	if force_world.length_squared() <= MINIMUM_FORCE_SQUARED:
-		return
-
-	var application_point_world: Vector3 = resultant.get(
-		"effective_application_point_world",
-		_ship.global_transform * _ship.center_of_mass
-	)
-	var center_of_mass_world: Vector3 = _ship.global_transform * _ship.center_of_mass
-	var application_offset_world: Vector3 = application_point_world - _ship.global_position
-
-	# Godot expects a force offset from the body origin in global coordinates.
-	# A weighted group point preserves the group moment without separate torque
-	# for the normal aligned-vane case.
-	_ship.apply_force(force_world, application_offset_world)
-
-	var torque_from_application_point: Vector3 = (
-		application_point_world - center_of_mass_world
-	).cross(force_world)
-	var exact_group_torque: Vector3 = resultant.get("net_torque", torque_from_application_point)
-	var residual_torque: Vector3 = exact_group_torque - torque_from_application_point
-	if residual_torque.length_squared() > MINIMUM_TORQUE_SQUARED:
-		# Alignment offsets can make individual vane directions differ. Preserve
-		# the remaining couple as a pure torque rather than losing that physics.
-		_ship.apply_torque(residual_torque)
-
-	_last_total_force += force_world
-	_last_total_torque += exact_group_torque
-	_last_vane_contributions.append_array(resultant.get("contributions", []))
-	_last_force_vectors.append({
-		"name": force_name,
-		"kind": force_kind,
-		"force_world": force_world,
-		"application_point_world": application_point_world,
-	})
+func _empty_main_vector_allocation() -> Dictionary:
+	return {
+		"success": true,
+		"converged": true,
+		"actuator_outputs": [],
+		"eligible_actuator_count": 0,
+		"normalized_error": 0.0,
+		"target_force_local_n": Vector3.ZERO,
+		"achieved_force_local_n": Vector3.ZERO,
+		"force_residual_local_n": Vector3.ZERO,
+		"target_torque_local_nm": Vector3.ZERO,
+		"achieved_torque_local_nm": Vector3.ZERO,
+		"torque_residual_local_nm": Vector3.ZERO,
+	}
 
 
-func _get_bottom_nominal_authority_twr() -> float:
+func _get_nominal_lift_channel_capacity_twr() -> float:
 	if not is_instance_valid(_vane_controller):
 		return 0.0
-	return (
-		_vane_controller.get_group_nominal_authority_twr(BOTTOM_FRONT_GROUP)
-		+ _vane_controller.get_group_nominal_authority_twr(BOTTOM_REAR_GROUP)
-	)
+	var total: float = 0.0
+	for vane_id: StringName in _vane_controller.get_vane_ids():
+		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
+		if not is_instance_valid(definition) or not definition.enabled or definition.get_control_weight(&"lift") <= 0:
+			continue
+		var nominal_axis: Vector3 = definition.local_thrust_axis.normalized()
+		total += definition.nominal_authority_twr * absf(nominal_axis.dot(Vector3.UP))
+	return total
 
 
-func _get_bottom_effective_authority_twr() -> float:
+func _get_effective_lift_channel_capacity_twr() -> float:
+	return _get_main_vector_channel_capacity_twr(&"lift", Vector3.UP)
+
+
+func _get_active_maneuver_actuator_count() -> int:
 	if not is_instance_valid(_vane_controller):
-		return 0.0
-	return (
-		_vane_controller.get_group_effective_authority_twr(BOTTOM_FRONT_GROUP)
-		+ _vane_controller.get_group_effective_authority_twr(BOTTOM_REAR_GROUP)
-	)
+		return 0
+	var count: int = 0
+	for output_value: Dictionary in _last_maneuver_allocation.get("actuator_outputs", []):
+		var output_entry: Dictionary = output_value
+		var vane_id: StringName = StringName(str(output_entry.get("id", "")))
+		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
+		if not is_instance_valid(definition):
+			continue
+		var eligible: bool = (
+			(absf(_last_pitch_command) > 0.0001 and definition.get_control_weight(&"pitch") > 0)
+			or (absf(_last_roll_command) > 0.0001 and definition.get_control_weight(&"roll") > 0)
+			or (absf(_last_yaw_command) > 0.0001 and definition.get_control_weight(&"yaw") > 0)
+		)
+		if eligible:
+			count += 1
+	return count
+
+
+func _count_maneuver_eligible_outputs(output_values: Array) -> int:
+	if not is_instance_valid(_vane_controller):
+		return 0
+	var count: int = 0
+	for output_value: Variant in output_values:
+		if typeof(output_value) != TYPE_DICTIONARY:
+			continue
+		var output_entry: Dictionary = output_value
+		var vane_id: StringName = StringName(str(output_entry.get("id", "")))
+		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
+		if not is_instance_valid(definition):
+			continue
+		var eligible: bool = (
+			(absf(_last_pitch_command) > 0.0001 and definition.get_control_weight(&"pitch") > 0)
+			or (absf(_last_roll_command) > 0.0001 and definition.get_control_weight(&"roll") > 0)
+			or (absf(_last_yaw_command) > 0.0001 and definition.get_control_weight(&"yaw") > 0)
+		)
+		if eligible:
+			count += 1
+	return count
 
 
 func _get_gravity_vector_world() -> Vector3:
@@ -522,7 +670,7 @@ func _get_maximum_lift_twr_at_current_mass() -> float:
 	if local_gravity_mps2 <= 0.0001:
 		return 0.0
 	var rated_lift_force: float = (
-		_get_bottom_nominal_authority_twr()
+		_get_nominal_lift_channel_capacity_twr()
 		* _get_rated_gross_mass_kg()
 		* reference_gravity_mps2
 	)
@@ -551,7 +699,7 @@ func _update_force_debug(force_refresh: bool = false) -> void:
 ## Read-only snapshot for HUD and tests. HUD never modifies simulation state.
 func get_telemetry() -> Dictionary:
 	var local_gravity_magnitude: float = _get_gravity_vector_world().length() if is_instance_valid(_ship) else 0.0
-	var bottom_effective_twr: float = _get_bottom_effective_authority_twr()
+	var bottom_effective_twr: float = _get_effective_lift_channel_capacity_twr()
 	var hover_power_percent: float = -1.0
 	var rated_gross_mass_kg: float = _get_rated_gross_mass_kg()
 	var current_mass_kg: float = _ship.mass if is_instance_valid(_ship) else 0.0
@@ -592,9 +740,13 @@ func get_telemetry() -> Dictionary:
 		"maneuver_boost_at_zero_main_power": maneuver_boost_at_zero_main_power,
 		"vane_redistribution_fraction": _last_vane_redistribution_fraction,
 		"maximum_vane_output_multiplier": _last_maximum_vane_output_multiplier,
+		"actuator_allocator": _last_main_vector_allocation.duplicate(true),
 		"maneuver_allocator": _last_maneuver_allocation.duplicate(true),
-		"maneuver_allocator_active_actuators": int(_last_maneuver_allocation.get("eligible_actuator_count", 0)),
+		"maneuver_allocator_active_actuators": _get_active_maneuver_actuator_count(),
 		"maneuver_allocator_normalized_error": float(_last_maneuver_allocation.get("normalized_error", 0.0)),
+		"main_vector_allocator": _last_main_vector_allocation.duplicate(true),
+		"main_vector_allocator_active_actuators": int(_last_main_vector_allocation.get("eligible_actuator_count", 0)),
+		"main_vector_allocator_normalized_error": float(_last_main_vector_allocation.get("normalized_error", 0.0)),
 		"reference_gravity_mps2": reference_gravity_mps2,
 	}
 	telemetry.merge(vane_telemetry, true)

@@ -57,8 +57,8 @@ func _run_tests() -> void:
 		"vane_vertical_c": Vector3(-1.1, -0.61, 1.55),
 		"vane_vertical_d": Vector3(1.1, -0.61, 1.55),
 		"vane_horizontal_main_a": Vector3(0.0, 0.08, 2.78),
-		"vane_horizontal_side_a": Vector3(-1.62, 0.04, 0.12),
-		"vane_horizontal_side_b": Vector3(1.62, 0.04, 0.12),
+		"vane_horizontal_main_side_left": Vector3(-1.62, 0.04, 0.12),
+		"vane_horizontal_main_side_right": Vector3(1.62, 0.04, 0.12),
 	}
 	var full_model: Dictionary = await _make_model_and_registry(mount, full_positions)
 	var full_registry: ShipAnchorRegistry = full_model["registry"] as ShipAnchorRegistry
@@ -119,6 +119,23 @@ func _run_tests() -> void:
 		and int(left_vane_weights.get("pitch", 0)) == 100
 		and int(left_vane_weights.get("lift", 0)) == 100,
 		"Vane anchor naming defines its bidirectional local axis and JSON control weights are applied"
+	)
+
+	var port_yaw_vane: VaneDefinition = vane_controller.get_vane_definition(&"side_left")
+	var starboard_yaw_vane: VaneDefinition = vane_controller.get_vane_definition(&"side_right")
+	_expect(
+		port_yaw_vane != null and starboard_yaw_vane != null
+		and port_yaw_vane.axis_family == &"horizontal_main"
+		and starboard_yaw_vane.axis_family == &"horizontal_main"
+		and port_yaw_vane.local_thrust_axis.is_equal_approx(Vector3.BACK)
+		and starboard_yaw_vane.local_thrust_axis.is_equal_approx(Vector3.BACK),
+		"Side-mounted yaw anchors resolve to the longitudinal bidirectional thrust axis"
+	)
+	_expect(
+		port_yaw_vane != null and starboard_yaw_vane != null
+		and port_yaw_vane.local_position.x < 0.0
+		and starboard_yaw_vane.local_position.x > 0.0,
+		"Yaw vane anchors preserve the port/starboard lever-arm separation"
 	)
 
 	# A ship definition may declare more actuators than the prototype .tres set.

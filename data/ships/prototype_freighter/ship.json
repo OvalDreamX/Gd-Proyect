@@ -221,7 +221,7 @@
       {
         "id": "side_left",
         "display_name": "Left Side Yaw Vane",
-        "anchor": "ANCHOR_vane_horizontal_side_a",
+        "anchor": "ANCHOR_vane_horizontal_main_side_left",
         "group": "side_left",
         "authority_twr": 0.03,
         "control_weights": {
@@ -238,7 +238,7 @@
       {
         "id": "side_right",
         "display_name": "Right Side Yaw Vane",
-        "anchor": "ANCHOR_vane_horizontal_side_b",
+        "anchor": "ANCHOR_vane_horizontal_main_side_right",
         "group": "side_right",
         "authority_twr": 0.03,
         "control_weights": {

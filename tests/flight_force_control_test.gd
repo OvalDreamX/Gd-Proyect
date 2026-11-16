@@ -7,6 +7,10 @@ extends SceneTree
 const SHIP_SCENE = preload("res://scenes/ship.tscn")
 const VANE_DEFINITION_SCRIPT = preload("res://scripts/vane_definition.gd")
 const EPSILON: float = 0.01
+## Godot Vector3 uses single-precision components. Summing large opposing force
+## vectors can leave a sub-0.1 N diagnostic residual even when the wrench is
+## balanced to better than 1e-7 of the rated ship force.
+const FORCE_VECTOR_CANCELLATION_TOLERANCE_N: float = 0.1
 const TEST_ALTITUDE: float = 100.0
 const TEST_TICKS: int = 30
 
@@ -106,7 +110,22 @@ func _run_tests() -> void:
 	_expect_near(main_force.length(), 0.0, EPSILON, "Zero main-vector throttle produces no translational force")
 	var combined_maneuver_forces: Array[Dictionary] = _forces_of_kind(telemetry, "maneuver")
 	var idle_yaw_forces: Array[Dictionary] = _forces_of_kind(telemetry, "yaw")
-	_expect_equal(combined_maneuver_forces.size(), 4, "Combined pitch/roll demand allocates across all four eligible bottom actuators")
+	# With equal pitch and roll requests, the two diagonally opposed bottom
+	# vanes form the minimum-force couple and generate both requested moments.
+	# The other two bottom vanes remain eligible in the unified allocation but
+	# correctly receive zero output for this particular command combination.
+	_expect_equal(combined_maneuver_forces.size(), 2, "Combined equal pitch/roll demand uses the efficient diagonal actuator pair")
+	var combined_idle_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
+	_expect(absf(combined_idle_torque.x) > EPSILON and absf(combined_idle_torque.z) > EPSILON, "Diagonal allocation generates both pitch and roll moments")
+	var combined_allocation: Dictionary = telemetry.get("maneuver_allocator", {})
+	var bottom_vane_ids: Array[StringName] = [
+		&"bottom_front_left", &"bottom_front_right", &"bottom_rear_left", &"bottom_rear_right"
+	]
+	_expect_equal(
+		_count_outputs_for_vanes(combined_allocation.get("actuator_outputs", []), bottom_vane_ids),
+		4,
+		"All four bottom vanes remain eligible for combined pitch/roll allocation"
+	)
 	_expect_equal(idle_yaw_forces.size(), 2, "Yaw remains available through the legacy side-vane pair")
 	_expect_near(float(telemetry.get("maneuver_power_multiplier", 0.0)), 1.2, EPSILON, "Idle main-vector allocation provides a capped 20% maneuver reserve")
 
@@ -131,7 +150,7 @@ func _run_tests() -> void:
 	var pitch_pair_force: Vector3 = _sum_forces(pitch_forces)
 	var pitch_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
 	_expect_equal(pitch_forces.size(), 4, "Pitch allocation drives each eligible vane from its geometry")
-	_expect_near(pitch_pair_force.length(), 0.0, EPSILON, "Healthy pitch pair cancels net translation")
+	_expect_near(pitch_pair_force.length(), 0.0, FORCE_VECTOR_CANCELLATION_TOLERANCE_N, "Healthy pitch pair cancels net translation within Vector3 precision")
 	_expect(pitch_torque.x > EPSILON, "Positive pitch command creates nose-up torque")
 	var pitch_allocation: Dictionary = telemetry.get("maneuver_allocator", {})
 	_expect(bool(pitch_allocation.get("success", false)), "Pitch actuator allocation succeeds")
@@ -145,7 +164,7 @@ func _run_tests() -> void:
 	var roll_pair_force: Vector3 = _sum_forces(roll_forces)
 	var roll_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
 	_expect_equal(roll_forces.size(), 4, "Roll allocation drives each eligible vane from its geometry")
-	_expect_near(roll_pair_force.length(), 0.0, EPSILON, "Healthy roll pair cancels net translation")
+	_expect_near(roll_pair_force.length(), 0.0, FORCE_VECTOR_CANCELLATION_TOLERANCE_N, "Healthy roll pair cancels net translation within Vector3 precision")
 	_expect(roll_torque.z < -EPSILON, "Positive roll command banks right")
 
 	# Yaw uses the side-vane pair in opposite fore/aft directions.
@@ -207,17 +226,17 @@ func _run_tests() -> void:
 	_expect_near(telemetry.get("lift_force_newtons", 0.0), 0.0, EPSILON, "Field OFF removes all generated forces")
 	_expect_equal(telemetry.get("lift_force_vectors", []).size(), 0, "Field OFF leaves no active force-vector debug entries")
 
-	# The geometry allocator exposes each actuator's actual contribution. A
-	# weakened front-right vane cannot match its healthy counterpart, so the
-	# asymmetry produces the physically expected small cross-axis roll moment.
+	# A damaged asymmetric lift array cannot always be represented as a central
+	# main force plus a torque-only maneuver delta. In that case the unified
+	# solver correctly reports the physical actuator forces as COMBINED.
 	vane_controller.reset_all_vanes()
 	_set_all_vane_temperatures(vane_controller, 60.0)
 	vane_controller.set_vane_integrity(&"bottom_front_right", 0.5)
 	system.apply_flight_control_forces(true, 1.0, 90.0, 1.0, 0.0, 0.0, 0.0, 1.2)
 	telemetry = system.get_telemetry()
-	var damaged_pitch_forces: Array[Dictionary] = _forces_of_kind(telemetry, "pitch")
+	var damaged_combined_forces: Array[Dictionary] = _forces_of_kind(telemetry, "combined")
 	var damaged_roll_moment: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	_expect_equal(damaged_pitch_forces.size(), 4, "Damaged pitch allocation continues to use the full eligible actuator set")
+	_expect_equal(damaged_combined_forces.size(), 4, "Damaged lift and pitch are reported as combined forces when the main-only baseline is infeasible")
 	_expect(damaged_roll_moment.z < -EPSILON, "Asymmetric vane damage creates the expected cross-axis roll moment")
 	var uncompensated_authority: float = _sum_contribution_authority(telemetry.get("lift_vane_contributions", []))
 	var damaged_right_authority: float = _find_contribution_authority(
@@ -302,6 +321,18 @@ func _forces_of_kind(telemetry: Dictionary, kind: String) -> Array[Dictionary]:
 		if str(force_entry.get("kind", "")) == kind:
 			result.append(force_entry)
 	return result
+
+
+func _count_outputs_for_vanes(output_values: Array, vane_ids: Array[StringName]) -> int:
+	var count: int = 0
+	for output_value: Variant in output_values:
+		if typeof(output_value) != TYPE_DICTIONARY:
+			continue
+		var output_entry: Dictionary = output_value
+		var output_id := StringName(str(output_entry.get("id", "")))
+		if vane_ids.has(output_id):
+			count += 1
+	return count
 
 
 func _sum_forces(entries: Array[Dictionary]) -> Vector3:
