@@ -1,0 +1,87 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Script" path="res://scripts/planet_surface_environment.gd" id="1_env_script"]
+[ext_resource type="Script" path="res://scripts/environment_manager.gd" id="2_env_manager"]
+[ext_resource type="Resource" path="res://data/environments/test_planet_surface.tres" id="3_planet_profile"]
+[ext_resource type="Script" path="res://scripts/planetary_reference_frame.gd" id="4_planetary_frame"]
+[ext_resource type="PackedScene" path="res://scenes/ship_ground_effect.tscn" id="5_ship"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="6_player"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_planet"]
+sky_top_color = Color(0.2, 0.48, 0.8, 1)
+sky_horizon_color = Color(0.87, 0.84, 0.74, 1)
+sky_curve = 0.085
+ground_bottom_color = Color(0.56, 0.44, 0.28, 1)
+ground_horizon_color = Color(0.84, 0.77, 0.62, 1)
+ground_curve = 0.08
+
+[sub_resource type="Sky" id="Sky_planet"]
+sky_material = SubResource("ProceduralSkyMaterial_planet")
+
+[sub_resource type="Environment" id="Environment_planet"]
+background_mode = 2
+sky = SubResource("Sky_planet")
+ambient_light_source = 2
+ambient_light_color = Color(0.76, 0.72, 0.62, 1)
+ambient_light_energy = 0.68
+fog_enabled = true
+fog_light_color = Color(0.87, 0.84, 0.74, 1)
+fog_density = 0.00009
+
+[sub_resource type="BoxMesh" id="BoxMesh_starport_pad"]
+size = Vector3(28, 0.2, 28)
+
+[sub_resource type="BoxShape3D" id="BoxShape_starport_pad"]
+size = Vector3(28, 0.2, 28)
+
+[sub_resource type="StandardMaterial3D" id="Material_starport_pad"]
+albedo_color = Color(0.20, 0.19, 0.17, 1)
+roughness = 0.9
+
+[node name="PlanetSurface" type="Node3D"]
+script = ExtResource("1_env_script")
+
+[node name="EnvironmentManager" type="Node" parent="."]
+script = ExtResource("2_env_manager")
+active_profile = ExtResource("3_planet_profile")
+
+[node name="PlanetaryReferenceFrame" type="Node3D" parent="."]
+position = Vector3(0, -600000, 0)
+script = ExtResource("4_planetary_frame")
+surface_geometry = 1
+surface_radius_m = 600000.0
+surface_gravity_mps2 = 9.81
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_planet")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-18, 65, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.0
+shadow_enabled = true
+directional_shadow_max_distance = 350.0
+
+[node name="StarportPad" type="StaticBody3D" parent="."]
+position = Vector3(0, -0.1, 0)
+collision_layer = 1
+collision_mask = 1
+
+[node name="PadMesh" type="MeshInstance3D" parent="StarportPad"]
+mesh = SubResource("BoxMesh_starport_pad")
+material_override = SubResource("Material_starport_pad")
+
+[node name="PadCollision" type="CollisionShape3D" parent="StarportPad"]
+shape = SubResource("BoxShape_starport_pad")
+
+[node name="ShipSpawnPoint" type="Marker3D" parent="."]
+position = Vector3(0, 0.755, 0)
+
+[node name="PlayerSpawnPoint" type="Marker3D" parent="."]
+position = Vector3(0, 0, 7)
+
+[node name="Ship" parent="." instance=ExtResource("5_ship")]
+position = Vector3(0, 0.755, 0)
+
+[node name="Player" parent="." instance=ExtResource("6_player")]
+position = Vector3(0, 0, 7)

@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="EnvironmentProfile" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/environment_profile.gd" id="1_script"]
+[ext_resource type="Resource" path="res://data/celestial/test_planet.tres" id="2_body"]
+
+[resource]
+script = ExtResource("1_script")
+environment_id = &"env_test_planet_surface"
+environment_type = 0
+display_label = "Tatooine Surface"
+celestial_body = ExtResource("2_body")
+surface_geometry_mode = 1
+gravity_enabled = true
+fallback_surface_gravity_mps2 = 9.81
+fallback_surface_radius_m = 600000.0
+north_reference_local = Vector3(0, 0, -1)
+atmosphere_enabled = true
+override_body_atmosphere = false
+atmosphere_preset = "DESERT_TATOOINE"
+sea_level_density_kg_m3 = 1.225
+density_scale_height_m = 8500.0
+atmosphere_top_altitude_m = 45000.0
+mean_wind_velocity_local_mps = Vector3(5, 0, -6.25)
+wind_turbulence_enabled = true
+wind_turbulence_amplitude_mps = 1.1
+ambient_temperature_celsius = -10.0
+sky_clear_color = Color(0.87, 0.84, 0.74, 1)
+ambient_light_color = Color(0.76, 0.72, 0.62, 1)
+ambient_light_energy = 0.68
+jump_allowed = true
+jump_min_altitude_m = 45000.0
+jump_exclusion_radius_m = 0.0
+jump_max_speed_mps = 0.0
+jump_require_systems_online = true
+jump_disallow_contact = true

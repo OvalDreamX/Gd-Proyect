@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="EnvironmentProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/environment_profile.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+environment_id = &"env_station_local_space"
+environment_type = 1
+display_label = "Orbital Station Local Space"
+surface_geometry_mode = 0
+gravity_enabled = false
+fallback_surface_gravity_mps2 = 0.0
+fallback_surface_radius_m = 0.0
+north_reference_local = Vector3(0, 0, -1)
+atmosphere_enabled = false
+override_body_atmosphere = true
+sea_level_density_kg_m3 = 0.0
+density_scale_height_m = 8500.0
+atmosphere_top_altitude_m = 0.0
+mean_wind_velocity_local_mps = Vector3(0, 0, 0)
+wind_turbulence_enabled = false
+wind_turbulence_amplitude_mps = 0.0
+ambient_temperature_celsius = -150.0
+sky_clear_color = Color(0.02, 0.025, 0.04, 1)
+ambient_light_color = Color(0.24, 0.27, 0.34, 1)
+ambient_light_energy = 0.35
+jump_allowed = true
+jump_min_altitude_m = 0.0
+jump_exclusion_radius_m = 250.0
+jump_max_speed_mps = 0.0
+jump_require_systems_online = true
+jump_disallow_contact = true

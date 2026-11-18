@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="StationDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/station_definition.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+station_id = &"station_orbital_cube_01"
+display_name = "Orbital Relay Cube 01"
+parent_body_id = &"body_test_planet"
+orbit_mode = 0
+orbital_radius_m = 180000.0
+system_relative_position_m = Vector3(0, 0, -180000)
+station_scene_path = "res://scenes/station_local_space.tscn"
+environment_profile_path = "res://data/environments/station_local_space.tres"
+station_size_m = Vector3(120, 120, 120)
+safe_arrival_offset_m = Vector3(0, 0, 450)
+docking_zone_offset_m = Vector3(0, 0, 78)
+docking_zone_size_m = Vector3(42, 28, 34)
+exclusion_radius_m = 250.0

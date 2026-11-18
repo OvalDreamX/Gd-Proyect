@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="FixedTestRouteDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/fixed_test_route_definition.gd" id="1_route_script"]
+
+[resource]
+script = ExtResource("1_route_script")
+route_id = &"route_planet_to_station"
+display_name = "Test Planet Departure -> Orbital Relay Cube 01"
+origin_location_id = &"env_test_planet_surface"
+destination_location_id = &"env_station_local_space"
+required_departure_env_type = "PLANET_SURFACE"
+destination_scene_path = "res://scenes/station_local_space.tscn"
+reverse_route_id = &"route_station_to_planet"
+reverse_route_path = "res://data/routes/route_station_to_planet.tres"
+jump_duration_seconds = 420.0
+visual_transition_seconds = 1.6
+arrival_position_local_m = Vector3(0, 0, 450)
+arrival_rotation_degrees = Vector3(0, 0, 0)
+arrival_velocity_local_mps = Vector3(0, 0, 0)

@@ -1,0 +1,52 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://scripts/station_local_space_environment.gd" id="1_env_script"]
+[ext_resource type="Resource" path="res://data/stations/orbital_cube_station.tres" id="2_station_def"]
+[ext_resource type="Script" path="res://scripts/environment_manager.gd" id="3_env_manager"]
+[ext_resource type="Resource" path="res://data/environments/station_local_space.tres" id="4_space_profile"]
+[ext_resource type="PackedScene" path="res://scenes/ship_ground_effect.tscn" id="5_ship"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="6_player"]
+
+[sub_resource type="Environment" id="Environment_station_space"]
+background_mode = 1
+background_color = Color(0.004, 0.006, 0.014, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.18, 0.21, 0.28, 1)
+ambient_light_energy = 0.22
+fog_enabled = false
+
+[node name="StationLocalSpace" type="Node3D"]
+script = ExtResource("1_env_script")
+station_definition = ExtResource("2_station_def")
+
+[node name="EnvironmentManager" type="Node" parent="."]
+script = ExtResource("3_env_manager")
+active_profile = ExtResource("4_space_profile")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_station_space")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-12, -65, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.0
+shadow_enabled = true
+
+[node name="RimFillLight" type="DirectionalLight3D" parent="."]
+visible = false
+rotation_degrees = Vector3(24, 145, 0)
+light_color = Color(0.45, 0.62, 0.85, 1)
+light_energy = 0.0
+shadow_enabled = false
+
+[node name="ShipArrivalPoint" type="Marker3D" parent="."]
+position = Vector3(0, 0, 450)
+
+[node name="PlayerSpawnPoint" type="Marker3D" parent="."]
+position = Vector3(0, 0, 457)
+
+[node name="Ship" parent="." instance=ExtResource("5_ship")]
+position = Vector3(0, 0, 450)
+
+[node name="Player" parent="." instance=ExtResource("6_player")]
+position = Vector3(0, 0, 457)

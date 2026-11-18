@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "system_id": "test_system",
+  "display_name": "Solara Test System",
+  "time_scale": 1.0,
+  "initial_epoch_seconds": 0.0,
+  "stars": [
+    {
+      "star_id": "sol_prime",
+      "display_name": "Sol Prime",
+      "light_color": [1.0, 0.96, 0.90],
+      "light_intensity": 1.0,
+      "radius_m": 696340000.0,
+      "position_m": [0.0, 0.0, 0.0],
+      "disc_color": [1.0, 0.97, 0.89],
+      "disc_angular_radius_deg": 0.95
+    }
+  ],
+  "planets": [
+    {
+      "planet_id": "test_planet",
+      "display_name": "Tatooine",
+      "planet_type": "DESERT",
+      "atmosphere_preset": "DESERT_TATOOINE",
+      "parent_star_id": "sol_prime",
+      "radius_m": 600000.0,
+      "orbital_radius_m": 150000000.0,
+      "orbital_period_seconds": 7200.0,
+      "orbital_inclination_deg": 0.0,
+      "initial_orbital_angle_deg": 205.0,
+      "rotation_period_seconds": 1800.0,
+      "axial_tilt_deg": 12.0,
+      "starport_latitude_deg": 35.0,
+      "initial_rotation_deg": 32.5,
+      "atmosphere_color": [0.16, 0.52, 1.0],
+      "surface_tint": [0.85, 0.68, 0.44]
+    }
+  ],
+  "stations": [
+    {
+      "station_id": "station_orbital_cube_01",
+      "display_name": "Orbital Relay Cube 01",
+      "orbit_parent_id": "test_planet",
+      "orbital_radius_m": 654000.0,
+      "orbital_period_seconds": 1440.0,
+      "orbital_inclination_deg": 72.4,
+      "initial_orbital_angle_deg": 41.4
+    }
+  ]
+}

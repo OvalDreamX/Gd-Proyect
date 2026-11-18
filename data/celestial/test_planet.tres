@@ -1,0 +1,38 @@
+[gd_resource type="Resource" script_class="CelestialBodyDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/celestial_body_definition.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+body_id = &"test_planet"
+display_name = "Tatooine"
+radius_m = 600000.0
+surface_gravity_mps2 = 9.81
+rotation_period_seconds = 0.0
+north_axis_local = Vector3(0, 0, -1)
+atmosphere_preset = "DESERT_TATOOINE"
+has_atmosphere = true
+sea_level_density_kg_m3 = 1.225
+atmosphere_scale_height_m = 8500.0
+atmosphere_top_altitude_m = 45000.0
+ambient_temperature_celsius = -10.0
+use_altitude_temperature_curve = true
+surface_temperature_celsius = 16.0
+tropopause_altitude_m = 14000.0
+tropopause_temperature_celsius = -58.0
+exosphere_temperature_celsius = -135.0
+jacchia_exospheric_temp_k = 950.0
+mean_molar_mass_kg_mol = 0.02896
+molecular_diameter_m = 3.7e-10
+gas_gamma = 1.4
+ozone_warming_enabled = false
+use_custom_atmosphere_colors = true
+sky_zenith_color = Color(0.2, 0.48, 0.8, 1)
+sky_horizon_color = Color(0.87, 0.84, 0.74, 1)
+sunset_zenith_color = Color(0.14, 0.28, 0.56, 1)
+sunset_horizon_color = Color(0.88, 0.68, 0.46, 1)
+limb_rim_color = Color(0.16, 0.52, 1, 1)
+rayleigh_strength = 1.0
+mie_dust_factor = 0.28
+star_direction_local = Vector3(-0.45, -0.75, -0.48)
+star_color = Color(1, 0.96, 0.9, 1)

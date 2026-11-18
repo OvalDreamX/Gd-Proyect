@@ -4,307 +4,349 @@
   "display_name": "Prototype Freighter",
   "model": "model.glb",
   "identity": {
-    "manufacturer": "Space Trucker Test Range",
-    "class": "Light freighter",
-    "description": "Reference configuration matching the current prototype ship."
+	"manufacturer": "Corellian-Class Yard Reference",
+	"class": "Medium freighter",
+	"description": "Stock heavy-ish medium freighter baseline with convective radiators, cargo inertia, and multi-tier vane endurance."
   },
   "physics": {
-    "dry_mass_kg": 30000.0,
-    "dry_center_of_mass_m": [
-      0.0,
-      0.0,
-      0.0
-    ],
-    "dry_hull_dimensions_m": [
-      3.6,
-      1.5,
-      5.2
-    ],
-    "max_payload_mass_kg": 25000.0,
-    "collision_shape": {
-      "type": "box",
-      "size_m": [
-        3.6,
-        1.5,
-        5.2
-      ],
-      "position_m": [
-        0.0,
-        0.0,
-        0.0
-      ]
-    }
+	"dry_mass_kg": 30000,
+	"dry_center_of_mass_m": [
+	  0,
+	  0,
+	  0
+	],
+	"dry_hull_dimensions_m": [
+	  3.6,
+	  1.5,
+	  5.2
+	],
+	"max_payload_mass_kg": 25000,
+	"collision_shape": {
+	  "type": "box",
+	  "size_m": [
+		3.6,
+		1.5,
+		5.2
+	  ],
+	  "position_m": [
+		0,
+		0,
+		0
+	  ]
+	}
   },
   "cargo": {
-    "hold_min_m": [
-      -4.0,
-      -1.0,
-      -6.0
-    ],
-    "hold_max_m": [
-      4.0,
-      1.0,
-      6.0
-    ],
-    "payload_distribution_dimensions_m": [
-      2.0,
-      1.0,
-      3.0
-    ],
-    "presets": {
-      "PORT_HEAVY": {
-        "mass_kg": 20000.0,
-        "offset_m": [
-          -3.0,
-          0.0,
-          0.0
-        ]
-      },
-      "STARBOARD_HEAVY": {
-        "mass_kg": 20000.0,
-        "offset_m": [
-          3.0,
-          0.0,
-          0.0
-        ]
-      },
-      "NOSE_HEAVY": {
-        "mass_kg": 20000.0,
-        "offset_m": [
-          0.0,
-          0.0,
-          -4.0
-        ]
-      },
-      "AFT_HEAVY": {
-        "mass_kg": 20000.0,
-        "offset_m": [
-          0.0,
-          0.0,
-          4.0
-        ]
-      }
-    }
+	"hold_min_m": [
+	  -4,
+	  -1,
+	  -6
+	],
+	"hold_max_m": [
+	  4,
+	  1,
+	  6
+	],
+	"payload_distribution_dimensions_m": [
+	  2,
+	  1,
+	  3
+	],
+	"presets": {
+	  "PORT_HEAVY": {
+		"mass_kg": 20000,
+		"offset_m": [
+		  -3,
+		  0,
+		  0
+		]
+	  },
+	  "STARBOARD_HEAVY": {
+		"mass_kg": 20000,
+		"offset_m": [
+		  3,
+		  0,
+		  0
+		]
+	  },
+	  "NOSE_HEAVY": {
+		"mass_kg": 20000,
+		"offset_m": [
+		  0,
+		  0,
+		  -4
+		]
+	  },
+	  "AFT_HEAVY": {
+		"mass_kg": 20000,
+		"offset_m": [
+		  0,
+		  0,
+		  4
+		]
+	  }
+	}
   },
   "propulsion": {
-    "reference_gravity_mps2": 9.81,
-    "maneuver_authority_fraction": 0.05,
-    "maneuver_boost_at_zero_main_power": 0.2,
-    "control_sets": {
-      "pitch_front": {
-        "member_type": "vane_ids",
-        "members": [
-          "bottom_front_left",
+	"reference_gravity_mps2": 9.81,
+	"maneuver_authority_fraction": 0.08,
+	"maneuver_boost_at_zero_main_power": 0.2,
+	"startup_duration_seconds": 1,
+	"field_power_output_rate_per_second": 0.35,
+	"vector_output_change_degrees_per_second": 32,
+	"control_sets": {
+	  "pitch_front": {
+		"member_type": "vane_ids",
+		"members": [
+		  "bottom_front_left",
           "bottom_front_right"
-        ]
-      },
-      "pitch_rear": {
-        "member_type": "vane_ids",
-        "members": [
-          "bottom_rear_left",
+		]
+	  },
+	  "pitch_rear": {
+		"member_type": "vane_ids",
+		"members": [
+		  "bottom_rear_left",
           "bottom_rear_right"
-        ]
-      },
-      "roll_left": {
-        "member_type": "vane_ids",
-        "members": [
-          "bottom_front_left",
+		]
+	  },
+	  "roll_left": {
+		"member_type": "vane_ids",
+		"members": [
+		  "bottom_front_left",
           "bottom_rear_left"
-        ]
-      },
-      "roll_right": {
-        "member_type": "vane_ids",
-        "members": [
-          "bottom_front_right",
+		]
+	  },
+	  "roll_right": {
+		"member_type": "vane_ids",
+		"members": [
+		  "bottom_front_right",
           "bottom_rear_right"
-        ]
-      },
-      "yaw_left": {
-        "member_type": "group_ids",
-        "members": [
+		]
+	  },
+	  "yaw_left": {
+		"member_type": "group_ids",
+		"members": [
           "side_left"
-        ]
-      },
-      "yaw_right": {
-        "member_type": "group_ids",
-        "members": [
+		]
+	  },
+	  "yaw_right": {
+		"member_type": "group_ids",
+		"members": [
           "side_right"
-        ]
-      }
-    },
-    "vanes": [
-      {
-        "id": "bottom_front_left",
-        "display_name": "Bottom Front Left",
-        "anchor": "ANCHOR_vane_vertical_a",
-        "group": "bottom_front",
-        "authority_twr": 0.275,
-        "control_weights": {
-          "pitch": 100,
-          "roll": 100,
-          "yaw": 0,
-          "lift": 100,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "bottom_front_right",
-        "display_name": "Bottom Front Right",
-        "anchor": "ANCHOR_vane_vertical_b",
-        "group": "bottom_front",
-        "authority_twr": 0.275,
-        "control_weights": {
-          "pitch": 100,
-          "roll": 100,
-          "yaw": 0,
-          "lift": 100,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "bottom_rear_left",
-        "display_name": "Bottom Rear Left",
-        "anchor": "ANCHOR_vane_vertical_c",
-        "group": "bottom_rear",
-        "authority_twr": 0.275,
-        "control_weights": {
-          "pitch": 100,
-          "roll": 100,
-          "yaw": 0,
-          "lift": 100,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "bottom_rear_right",
-        "display_name": "Bottom Rear Right",
-        "anchor": "ANCHOR_vane_vertical_d",
-        "group": "bottom_rear",
-        "authority_twr": 0.275,
-        "control_weights": {
-          "pitch": 100,
-          "roll": 100,
-          "yaw": 0,
-          "lift": 100,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "main_rear",
-        "display_name": "Main Rear Vane",
-        "anchor": "ANCHOR_vane_horizontal_main_a",
-        "group": "main_rear",
-        "authority_twr": 1.5,
-        "control_weights": {
-          "pitch": 0,
-          "roll": 0,
-          "yaw": 0,
-          "lift": 0,
-          "main_thrust": 100,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "side_left",
-        "display_name": "Left Side Yaw Vane",
-        "anchor": "ANCHOR_vane_horizontal_main_side_left",
-        "group": "side_left",
-        "authority_twr": 0.03,
-        "control_weights": {
-          "pitch": 0,
-          "roll": 0,
-          "yaw": 100,
-          "lift": 0,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      },
-      {
-        "id": "side_right",
-        "display_name": "Right Side Yaw Vane",
-        "anchor": "ANCHOR_vane_horizontal_main_side_right",
-        "group": "side_right",
-        "authority_twr": 0.03,
-        "control_weights": {
-          "pitch": 0,
-          "roll": 0,
-          "yaw": 100,
-          "lift": 0,
-          "main_thrust": 0,
-          "translate_x": 0,
-          "translate_y": 0,
-          "translate_z": 0
-        }
-      }
-    ],
-    "main_vector": {
-      "forward_group": "main_rear",
-      "lift_groups": [
-        "bottom_front",
+		]
+	  }
+	},
+	"vanes": [
+	  {
+		"id": "bottom_front_left",
+		"display_name": "Bottom Front Left",
+		"anchor": "ANCHOR_vane_vertical_a",
+		"group": "bottom_front",
+		"authority_twr": 0.275,
+		"control_weights": {
+		  "pitch": 100,
+		  "roll": 100,
+		  "yaw": 0,
+		  "lift": 100,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "bottom_front_right",
+		"display_name": "Bottom Front Right",
+		"anchor": "ANCHOR_vane_vertical_b",
+		"group": "bottom_front",
+		"authority_twr": 0.275,
+		"control_weights": {
+		  "pitch": 100,
+		  "roll": 100,
+		  "yaw": 0,
+		  "lift": 100,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "bottom_rear_left",
+		"display_name": "Bottom Rear Left",
+		"anchor": "ANCHOR_vane_vertical_c",
+		"group": "bottom_rear",
+		"authority_twr": 0.275,
+		"control_weights": {
+		  "pitch": 100,
+		  "roll": 100,
+		  "yaw": 0,
+		  "lift": 100,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "bottom_rear_right",
+		"display_name": "Bottom Rear Right",
+		"anchor": "ANCHOR_vane_vertical_d",
+		"group": "bottom_rear",
+		"authority_twr": 0.275,
+		"control_weights": {
+		  "pitch": 100,
+		  "roll": 100,
+		  "yaw": 0,
+		  "lift": 100,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "main_rear",
+		"display_name": "Main Rear Vane",
+		"anchor": "ANCHOR_vane_horizontal_main_a",
+		"group": "main_rear",
+		"authority_twr": 1.5,
+		"control_weights": {
+		  "pitch": 0,
+		  "roll": 0,
+		  "yaw": 0,
+		  "lift": 0,
+		  "main_thrust": 100,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "side_left",
+		"display_name": "Left Side Yaw Vane",
+		"anchor": "ANCHOR_vane_horizontal_main_side_left",
+		"group": "side_left",
+		"authority_twr": 0.03,
+		"control_weights": {
+		  "pitch": 0,
+		  "roll": 0,
+		  "yaw": 100,
+		  "lift": 0,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  },
+	  {
+		"id": "side_right",
+		"display_name": "Right Side Yaw Vane",
+		"anchor": "ANCHOR_vane_horizontal_main_side_right",
+		"group": "side_right",
+		"authority_twr": 0.03,
+		"control_weights": {
+		  "pitch": 0,
+		  "roll": 0,
+		  "yaw": 100,
+		  "lift": 0,
+		  "main_thrust": 0,
+		  "translate_x": 0,
+		  "translate_y": 0,
+		  "translate_z": 0
+		}
+	  }
+	],
+	"main_vector": {
+	  "forward_group": "main_rear",
+	  "lift_groups": [
+		"bottom_front",
         "bottom_rear"
-      ]
-    }
+	  ]
+	}
   },
   "handling": {
-    "maximum_pitch_rate_degrees_per_second": 32.0,
-    "maximum_roll_rate_degrees_per_second": 32.0,
-    "maximum_yaw_rate_degrees_per_second": 24.0
+	"maximum_pitch_rate_degrees_per_second": 36,
+	"maximum_roll_rate_degrees_per_second": 42,
+	"maximum_yaw_rate_degrees_per_second": 26
   },
   "aerodynamics": {
-    "drag_coefficient": 0.8,
-    "reference_area_m2": 18.0,
-    "hull_dimensions_m": [
-      3.6,
-      1.5,
-      5.2
-    ],
-    "shield_glide_lift_enabled": true,
-    "shield_effective_lift_area_m2": 36.0,
-    "shield_lift_effectiveness": 1.0,
-    "shield_max_lift_coefficient": 1.1,
-    "shield_stall_angle_degrees": 20.0,
-    "lift_minimum_airspeed_mps": 5.0,
-    "lift_full_effective_airspeed_mps": 18.0
+	"drag_coefficient": 0.34,
+	"reference_area_m2": 18,
+	"hull_dimensions_m": [
+	  3.6,
+	  1.5,
+	  5.2
+	],
+	"shield_glide_lift_enabled": true,
+	"shield_effective_lift_area_m2": 52,
+	"shield_lift_effectiveness": 1,
+	"shield_max_lift_coefficient": 1.35,
+	"shield_stall_angle_degrees": 22,
+	"lift_minimum_airspeed_mps": 6,
+	"lift_full_effective_airspeed_mps": 20,
+	"lift_induced_drag_factor": 0.05
+  },
+  "thermal_and_integrity": {
+	"enabled": true,
+	"nominal_warmup_temp_c": 55,
+	"max_continuous_temp_c": 185,
+	"critical_temp_c": 235,
+	"base_online_heat_rate": 1.6,
+	"heat_rate_coefficient": 14.4,
+	"load_exponent": 2.2,
+	"radiator": {
+	  "vacuum_cooling_coeff": 0.029,
+	  "air_cooling_coeff": 0.042,
+	  "air_density_exponent": 0.65,
+	  "airspeed_cooling_gain": 1.35,
+	  "airspeed_reference_mps": 300,
+	  "high_temp_radiation_threshold_c": 180,
+	  "high_temp_radiation_bonus": 0.011
+	},
+	"wear": {
+	  "base_wear_rate_per_second": 0.000025,
+	  "overheat_wear_rate_per_second": 0.00018,
+	  "critical_wear_rate_per_second": 0.00043,
+	  "cold_strain_wear_coefficient": 0.000025,
+	  "below_50_wear_exp_gain": 2.5
+	},
+	"integrity_tiers": {
+	  "worn_threshold": 0.75,
+	  "degraded_threshold": 0.5,
+	  "critical_threshold": 0.25,
+	  "twr_at_50_percent": 0.88,
+	  "twr_at_25_percent": 0.68,
+	  "twr_floor_above_zero": 0.48,
+	  "max_response_lag_multiplier": 0.72,
+	  "max_fault_chance_per_second_at_75_to_50": 0.22,
+	  "max_fault_chance_per_second_below_25": 1.4,
+	  "max_misalignment_degrees": 8.5,
+	  "startup_min_reliability_below_25": 0.35
+	}
   },
   "ground_effect": {
-    "enabled": true,
-    "probe_anchors": [
-      "ground_probe_front_left",
-      "ground_probe_front_right",
-      "ground_probe_rear_left",
+	"enabled": true,
+	"probe_anchors": [
+	  "ground_probe_front_left",
+	  "ground_probe_front_right",
+	  "ground_probe_rear_left",
       "ground_probe_rear_right"
-    ],
-    "footprint_width_m": 5.0,
-    "max_gain": 0.15,
-    "probe_ray_start_offset_m": 0.15,
-    "minimum_valid_probes": 3,
-    "surface_normal_alignment_min": 0.65,
-    "collision_mask": 1
+	],
+	"footprint_width_m": 5,
+	"max_gain": 0.15,
+	"probe_ray_start_offset_m": 0.15,
+	"minimum_valid_probes": 3,
+	"surface_normal_alignment_min": 0.65,
+	"collision_mask": 1
   },
   "cameras": {
-    "cockpit_anchor": "cockpit_camera",
-    "seat_anchor": "pilot_seat",
-    "external_focus_offset_m": [
-      0.0,
-      0.45,
-      0.0
-    ],
-    "external_distance_m": 11.0
+	"cockpit_anchor": "cockpit_camera",
+	"seat_anchor": "pilot_seat",
+	"external_focus_offset_m": [
+	  0,
+	  0.45,
+	  0
+	],
+	"external_distance_m": 11
   }
 }
