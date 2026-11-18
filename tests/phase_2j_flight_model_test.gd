@@ -196,7 +196,7 @@ func _test_live_rigid_body_glide_lift() -> void:
 	body.gravity_scale = 0.0
 	body.can_sleep = false
 	body.linear_velocity = Vector3(0.0, 0.0, -50.0)
-	body.global_basis = Basis(Vector3.RIGHT, deg_to_rad(10.0))
+	body.basis = Basis(Vector3.RIGHT, deg_to_rad(10.0))
 	var collision := CollisionShape3D.new()
 	var collision_sphere := SphereShape3D.new()
 	collision_sphere.radius = 1.0

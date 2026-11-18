@@ -226,6 +226,9 @@ func _run_tests() -> void:
 	_expect_near(telemetry.get("lift_force_newtons", 0.0), 0.0, EPSILON, "Field OFF removes all generated forces")
 	_expect_equal(telemetry.get("lift_force_vectors", []).size(), 0, "Field OFF leaves no active force-vector debug entries")
 
+	# Isolate 0.2 linear 0.5-TWR math check from ship.json tiered integrity curve.
+	var prev_tiered_ffc: bool = bool(vane_controller.get("tiered_integrity_enabled"))
+	vane_controller.set("tiered_integrity_enabled", false)
 	# A damaged asymmetric lift array cannot always be represented as a central
 	# main force plus a torque-only maneuver delta. In that case the unified
 	# solver correctly reports the physical actuator forces as COMBINED.
@@ -254,6 +257,7 @@ func _run_tests() -> void:
 	_expect(compensated_authority < 1.1, "Redistribution does not conceal the full damaged-vane deficit")
 	_expect_near(compensated_right_authority, damaged_right_authority, 0.0001, "Damaged actuator does not redistribute authority to itself")
 
+	vane_controller.set("tiered_integrity_enabled", prev_tiered_ffc)
 	# F3 controls only the visualization; it does not modify any force values.
 	var debug_node := ship.get_node("ForceVectorDebug") as ForceVectorDebug
 	system.set_debug_visualization_enabled(true)

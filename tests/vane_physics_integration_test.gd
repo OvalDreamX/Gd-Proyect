@@ -60,7 +60,7 @@ func _run_tests() -> void:
 	var right_damaged_roll_rate: float = ship.angular_velocity.z
 	_expect(
 		right_damaged_roll_rate < -DAMAGED_ROLL_RATE_MINIMUM,
-		"50%-effective right-front vane produces the expected roll direction (%.5f rad/s)" % right_damaged_roll_rate
+		"50%%-effective right-front vane produces the expected roll direction (%.5f rad/s)" % right_damaged_roll_rate
 	)
 
 	# Case 3: weaken the opposite vane. The roll direction must reverse.
@@ -71,7 +71,7 @@ func _run_tests() -> void:
 	var left_damaged_roll_rate: float = ship.angular_velocity.z
 	_expect(
 		left_damaged_roll_rate > DAMAGED_ROLL_RATE_MINIMUM,
-		"50%-effective left-front vane reverses the roll direction (%.5f rad/s)" % left_damaged_roll_rate
+		"50%%-effective left-front vane reverses the roll direction (%.5f rad/s)" % left_damaged_roll_rate
 	)
 
 	print("Vane physics integration tests: %d checks, %d failures." % [_checks, _failures])

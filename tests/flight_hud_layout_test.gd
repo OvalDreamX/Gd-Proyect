@@ -98,7 +98,7 @@ func _run_tests() -> void:
 	var diagnostics_view := debug_panel.find_child("DiagnosticsText", true, false) as TextEdit
 	_expect(diagnostics_view != null, "F3 diagnostics use a dedicated scrollable text viewport")
 	_expect(diagnostics_view != null and diagnostics_view.custom_minimum_size.y >= 200.0, "F3 diagnostics text viewport has a non-zero layout height")
-	_expect(diagnostics_view != null and diagnostics_view.text.contains("Power setpoint/output"), "F3 page contains the former flight telemetry")
+	_expect(diagnostics_view != null and diagnostics_view.text.contains("Main-vector throttle setpoint/output"), "F3 page contains the former flight telemetry")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("ATMOSPHERE / DRAG"), "F3 page includes atmospheric density and drag diagnostics")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("Input shaping"), "F3 page reports FCC deadzone and curve settings")
 	_expect(diagnostics_view != null and diagnostics_view.text.contains("Mean wind"), "F3 page reports mean wind and turbulence")

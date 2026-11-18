@@ -143,6 +143,8 @@ func _test_runtime_yaw_and_group_independence() -> void:
 	# Redistribution must stay within the yaw-capable set: spare bottom-vane
 	# pitch/roll capacity cannot compensate a missing longitudinal yaw moment.
 	_set_all_temperatures(controller, 60.0)
+	var prev_tiered_yaw: bool = bool(controller.get("tiered_integrity_enabled"))
+	controller.set("tiered_integrity_enabled", false)
 	controller.set_vane_integrity(&"side_left", 0.5)
 	system.apply_flight_control_forces(true, 1.0, 90.0, 0.4, -0.3, 0.7, 1.0, 1.2)
 	telemetry = system.get_telemetry()
@@ -153,6 +155,7 @@ func _test_runtime_yaw_and_group_independence() -> void:
 	_expect_near(side_right_max_force, reference_force_n * 0.036, 1.0, "Damaged yaw actuator redistributes only into the healthy yaw actuator")
 	_expect_near(bottom_front_left_max_force, reference_force_n * 0.275, 1.0, "Yaw damage does not consume unrelated bottom-actuator pitch/roll headroom")
 	controller.set_vane_integrity(&"side_left", 1.0)
+	controller.set("tiered_integrity_enabled", prev_tiered_yaw)
 
 	var restore_result: Dictionary = controller.configure_vanes(original_definitions)
 	_expect(bool(restore_result.get("success", false)), "Test restores the original prototype actuator definitions")

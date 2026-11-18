@@ -144,11 +144,14 @@ func _test_power_scaling(controller: VaneController, system: RepulsorliftSystem)
 
 func _test_damage_derating(controller: VaneController, system: RepulsorliftSystem) -> void:
 	_restore_nominal_condition(controller)
+	var prev_tiered: bool = bool(controller.get("tiered_integrity_enabled"))
+	controller.set("tiered_integrity_enabled", false)
 	_expect(controller.set_vane_integrity(&"main_rear", 0.5), "Main-thrust actuator accepts a 50% integrity test condition")
 	_expect(controller.set_vane_temperature(&"main_rear", 60.0), "Main-thrust actuator is held at nominal operating temperature")
 	system.apply_flight_control_forces(true, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.2, 1.0 / 60.0)
 	var force: Vector3 = system.get_telemetry().get("lift_main_force_vector", Vector3.ZERO)
 	_expect_near(force.length(), _reference_force_n() * 1.5 * 0.5, FORCE_TOLERANCE_N, "Main-vector capacity follows current integrity derating")
+	controller.set("tiered_integrity_enabled", prev_tiered)
 
 
 func _test_group_independence(controller: VaneController, system: RepulsorliftSystem) -> void:
