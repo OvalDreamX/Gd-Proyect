@@ -28,6 +28,11 @@ var _dry_hull_dimensions_local_m: Vector3 = FALLBACK_DRY_HULL_DIMENSIONS_LOCAL_M
 var _cargo_mass_kg: float = 0.0
 var _cargo_offset_m: Vector3 = Vector3.ZERO
 var _current_preset: String = "EMPTY"
+var _hold_min_m: Vector3 = CARGO_BAY_MIN
+var _hold_max_m: Vector3 = CARGO_BAY_MAX
+var _dry_com_m: Vector3 = Vector3.ZERO
+var _json_presets: Dictionary = {}
+var _nominal_bottom_twr: float = 1.10
 
 
 func _ready() -> void:
@@ -41,6 +46,48 @@ func _ready() -> void:
 	dry_mass_kg = _ship.get_design_dry_mass_kg()
 	max_payload_mass_kg = maxf(_ship.max_payload_mass_kg, 0.0)
 	_dry_hull_dimensions_local_m = _read_dry_hull_box_dimensions()
+	apply_manifest()
+
+func apply_ship_definition(definition: ShipDefinition) -> void:
+	if definition == null:
+		return
+	if definition.physics.has("dry_mass_kg"):
+		dry_mass_kg = maxf(float(definition.physics.get("dry_mass_kg", dry_mass_kg)), 1.0)
+	elif is_instance_valid(_ship):
+		dry_mass_kg = _ship.get_design_dry_mass_kg()
+	if definition.physics.has("max_payload_mass_kg"):
+		max_payload_mass_kg = maxf(float(definition.physics.get("max_payload_mass_kg", max_payload_mass_kg)), 0.0)
+	elif is_instance_valid(_ship):
+		max_payload_mass_kg = maxf(_ship.max_payload_mass_kg, 0.0)
+	if definition.physics.has("dry_center_of_mass_m") and definition.physics["dry_center_of_mass_m"] is Array:
+		var c: Array = definition.physics["dry_center_of_mass_m"]
+		if c.size() == 3:
+			_dry_com_m = Vector3(float(c[0]), float(c[1]), float(c[2]))
+	if definition.physics.has("dry_hull_dimensions_m") and definition.physics["dry_hull_dimensions_m"] is Array:
+		var d: Array = definition.physics["dry_hull_dimensions_m"]
+		if d.size() == 3:
+			_dry_hull_dimensions_local_m = Vector3(maxf(float(d[0]), 0.1), maxf(float(d[1]), 0.1), maxf(float(d[2]), 0.1))
+	if definition.cargo.has("hold_min_m") and definition.cargo["hold_min_m"] is Array:
+		var mn: Array = definition.cargo["hold_min_m"]
+		if mn.size() == 3:
+			_hold_min_m = Vector3(float(mn[0]), float(mn[1]), float(mn[2]))
+	if definition.cargo.has("hold_max_m") and definition.cargo["hold_max_m"] is Array:
+		var mx: Array = definition.cargo["hold_max_m"]
+		if mx.size() == 3:
+			_hold_max_m = Vector3(float(mx[0]), float(mx[1]), float(mx[2]))
+	if definition.cargo.has("payload_distribution_dimensions_m") and definition.cargo["payload_distribution_dimensions_m"] is Array:
+		var pdd: Array = definition.cargo["payload_distribution_dimensions_m"]
+		if pdd.size() == 3:
+			payload_distribution_dimensions_local_m = Vector3(maxf(float(pdd[0]), 0.1), maxf(float(pdd[1]), 0.1), maxf(float(pdd[2]), 0.1))
+	if definition.cargo.has("presets") and definition.cargo["presets"] is Dictionary:
+		_json_presets = (definition.cargo["presets"] as Dictionary).duplicate(true)
+	var bottom_twr_sum: float = 0.0
+	for v: Dictionary in definition.vanes:
+		var g: String = str(v.get("group", ""))
+		if g == "bottom_front" or g == "bottom_rear":
+			bottom_twr_sum += maxf(float(v.get("authority_twr", 0.0)), 0.0)
+	if bottom_twr_sum > 0.01:
+		_nominal_bottom_twr = bottom_twr_sum
 	apply_manifest()
 
 
@@ -63,7 +110,7 @@ func get_combined_center_of_mass_m() -> Vector3:
 	var total: float = get_total_mass_kg()
 	if total <= 0.0001:
 		return Vector3.ZERO
-	return (_cargo_offset_m * _cargo_mass_kg) / total
+	return (_dry_com_m * dry_mass_kg + _cargo_offset_m * _cargo_mass_kg) / total
 
 
 ## Reads the current prototype hull collider so its mass distribution follows the
@@ -92,7 +139,7 @@ func _get_scaled_cargo_dimensions_local_m() -> Vector3:
 		return Vector3.ZERO
 	var load_fraction: float = clampf(_cargo_mass_kg / max_payload_mass_kg, 0.0, 1.0)
 	var linear_scale: float = pow(load_fraction, 1.0 / 3.0)
-	var maximum_bay_dimensions: Vector3 = CARGO_BAY_MAX - CARGO_BAY_MIN
+	var maximum_bay_dimensions: Vector3 = _hold_max_m - _hold_min_m
 	var safe_dimensions := Vector3(
 		clampf(payload_distribution_dimensions_local_m.x, 0.0, maximum_bay_dimensions.x),
 		clampf(payload_distribution_dimensions_local_m.y, 0.0, maximum_bay_dimensions.y),
@@ -156,7 +203,7 @@ static func calculate_combined_inertia(
 ## It intentionally excludes thermal derating, damage and local gravity changes.
 func get_hover_throttle_estimate() -> float:
 	var design_gross_mass: float = dry_mass_kg + max_payload_mass_kg
-	var bottom_max_thrust_newtons: float = design_gross_mass * 9.81 * 1.10
+	var bottom_max_thrust_newtons: float = design_gross_mass * 9.81 * maxf(_nominal_bottom_twr, 0.05)
 	if bottom_max_thrust_newtons <= 0.001:
 		return 0.50
 	var required_lift_newtons: float = get_total_mass_kg() * 9.81
@@ -170,16 +217,23 @@ func set_cargo(mass_kg: float, offset_m: Vector3, preset_name: String = "CUSTOM"
 	else:
 		var half_envelope: Vector3 = _get_scaled_cargo_dimensions_local_m() * 0.5
 		_cargo_offset_m = Vector3(
-			clampf(offset_m.x, CARGO_BAY_MIN.x + half_envelope.x, CARGO_BAY_MAX.x - half_envelope.x),
-			clampf(offset_m.y, CARGO_BAY_MIN.y + half_envelope.y, CARGO_BAY_MAX.y - half_envelope.y),
-			clampf(offset_m.z, CARGO_BAY_MIN.z + half_envelope.z, CARGO_BAY_MAX.z - half_envelope.z)
+			clampf(offset_m.x, _hold_min_m.x + half_envelope.x, _hold_max_m.x - half_envelope.x),
+			clampf(offset_m.y, _hold_min_m.y + half_envelope.y, _hold_max_m.y - half_envelope.y),
+			clampf(offset_m.z, _hold_min_m.z + half_envelope.z, _hold_max_m.z - half_envelope.z)
 		)
 	_current_preset = preset_name
 	apply_manifest()
 
 
 func load_preset(preset_name: String) -> void:
-	match preset_name.to_upper():
+	var key: String = preset_name.to_upper()
+	if _json_presets.has(key) and _json_presets[key] is Dictionary:
+		var p: Dictionary = _json_presets[key]
+		var off_arr: Array = p.get("offset_m", [0.0, 0.0, 0.0])
+		var off_vec := Vector3(float(off_arr[0]), float(off_arr[1]), float(off_arr[2])) if off_arr.size() == 3 else Vector3.ZERO
+		set_cargo(float(p.get("mass_kg", 0.0)), off_vec, key)
+		return
+	match key:
 		"EMPTY":
 			set_cargo(0.0, Vector3.ZERO, "EMPTY")
 		"HALF_CENTERED":

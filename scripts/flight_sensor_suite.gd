@@ -15,6 +15,7 @@ const CHANNEL_ALTITUDE: StringName = &"altitude"
 
 @export_category("Environment")
 @export var planetary_reference_frame_path: NodePath = NodePath("../../PlanetaryReferenceFrame")
+@export var environment_manager_path: NodePath = NodePath("../../EnvironmentManager")
 
 @export_category("Navigation reference")
 ## Legacy world-space north fallback used only when no planetary frame exists.
@@ -24,7 +25,7 @@ var _ship: RigidBody3D
 var _atmosphere: Node
 var _gravity_body: Node
 var _planetary_reference_frame: PlanetaryReferenceFrame
-
+var _environment_manager: Node
 var _channel_available: Dictionary = {
 	CHANNEL_ATTITUDE: true,
 	CHANNEL_HEADING: true,
@@ -32,19 +33,19 @@ var _channel_available: Dictionary = {
 	CHANNEL_ALTITUDE: true,
 }
 
-
 func _enter_tree() -> void:
 	_ship = get_parent() as RigidBody3D
 	_atmosphere = get_node_or_null("../AtmosphericFlightModel")
 	_gravity_body = get_node_or_null("../PlanetaryGravityBody")
 	_planetary_reference_frame = get_node_or_null(planetary_reference_frame_path) as PlanetaryReferenceFrame
-
+	_environment_manager = get_node_or_null(environment_manager_path)
+	if not is_instance_valid(_environment_manager) and is_inside_tree():
+		_environment_manager = get_tree().get_first_node_in_group("environment_manager")
 
 func _ready() -> void:
 	if _ship == null:
 		push_error("FlightSensorSuite must be a direct child of the ship RigidBody3D.")
 		set_process(false)
-
 
 ## Allows later damage/sensor-failure systems to invalidate individual channels.
 ## The last measured value remains available for diagnostics, but consumers must
@@ -53,10 +54,8 @@ func set_channel_available(channel: StringName, available: bool) -> void:
 	if _channel_available.has(channel):
 		_channel_available[channel] = available
 
-
 func is_channel_available(channel: StringName) -> bool:
 	return bool(_channel_available.get(channel, false))
-
 
 ## Converts physical state and environment measurements into instrument values.
 ## No HUD code should read RigidBody3D or flight-model state directly.
@@ -72,8 +71,20 @@ func get_instrument_snapshot() -> Dictionary:
 	var altitude_m: float = _ship.global_position.y
 	var gravity_world: Vector3 = _ship.get_gravity()
 	var frame_available: bool = false
+	var environment_id: String = "test_range"
+	var environment_type: String = "PLANET_SURFACE"
+	var ambient_temperature_celsius: float = -10.0
 
-	if is_instance_valid(_planetary_reference_frame):
+	if is_instance_valid(_environment_manager) and _environment_manager.has_method("get_local_frame"):
+		var env_frame: Dictionary = _environment_manager.call("get_local_frame", _ship.global_position)
+		local_up = env_frame.get("up_world", Vector3.UP)
+		north_reference = env_frame.get("north_world", reference_north_world)
+		altitude_m = float(env_frame.get("altitude_m", altitude_m))
+		gravity_world = env_frame.get("gravity_world", gravity_world)
+		environment_id = str(_environment_manager.call("get_environment_id"))
+		environment_type = str(_environment_manager.call("get_environment_type_name"))
+		frame_available = true
+	elif is_instance_valid(_planetary_reference_frame):
 		var local_frame: Dictionary = _planetary_reference_frame.get_local_frame(_ship.global_position)
 		local_up = local_frame.get("up_world", Vector3.UP)
 		north_reference = local_frame.get("north_world", reference_north_world)
@@ -101,6 +112,7 @@ func get_instrument_snapshot() -> Dictionary:
 		atmosphere_relative_velocity = atmosphere_data.get("atmosphere_relative_velocity_world", ship_velocity)
 		atmosphere_airspeed = float(atmosphere_data.get("atmosphere_airspeed_mps", atmosphere_relative_velocity.length()))
 		atmosphere_available = bool(atmosphere_data.get("atmosphere_enabled", false))
+		ambient_temperature_celsius = float(atmosphere_data.get("atmosphere_temperature_celsius", ambient_temperature_celsius))
 	elif gravity_world.length_squared() > 0.000001:
 		local_up = -gravity_world.normalized()
 		altitude_m = _ship.global_position.dot(local_up)
@@ -120,6 +132,7 @@ func get_instrument_snapshot() -> Dictionary:
 	var in_atmosphere: bool = atmosphere_available and atmosphere_density > 0.00001
 	var measured_flight_velocity: Vector3 = atmosphere_relative_velocity if in_atmosphere else ship_velocity
 	var measured_speed: float = atmosphere_airspeed if in_atmosphere else ship_velocity.length()
+
 	var channel_attitude: bool = is_channel_available(CHANNEL_ATTITUDE)
 	var channel_heading: bool = is_channel_available(CHANNEL_HEADING) and bool(heading.get("valid", false))
 	var channel_velocity: bool = is_channel_available(CHANNEL_VELOCITY)
@@ -142,6 +155,9 @@ func get_instrument_snapshot() -> Dictionary:
 		"instrument_vertical_speed_mps": ship_velocity.dot(local_up),
 		"instrument_altitude_m": altitude_m,
 		"instrument_atmosphere_density_kg_m3": atmosphere_density,
+		"instrument_ambient_temperature_celsius": ambient_temperature_celsius,
+		"instrument_environment_id": environment_id,
+		"instrument_environment_type": environment_type,
 		"instrument_attitude_valid": channel_attitude,
 		"instrument_velocity_valid": channel_velocity,
 		"instrument_altitude_valid": channel_altitude,
@@ -153,15 +169,13 @@ func get_instrument_snapshot() -> Dictionary:
 		},
 	}
 
-
 ## Heading is computed in the local horizontal plane, so pitch angle cannot
 ## contaminate the compass reading. Heading is clockwise from north: N=000,
 ## E=090, S=180, W=270.
 static func calculate_heading_degrees(
 		forward_world: Vector3,
 		local_up_world: Vector3,
-		north_reference_world: Vector3
-) -> Dictionary:
+		north_reference_world: Vector3) -> Dictionary:
 	var result: Dictionary = {
 		"valid": false,
 		"heading_degrees": 0.0,
@@ -182,10 +196,12 @@ static func calculate_heading_degrees(
 		return result
 	north = north.normalized()
 	var east: Vector3 = north.cross(up).normalized()
+
 	var horizontal_forward: Vector3 = forward_world - up * forward_world.dot(up)
 	if horizontal_forward.length_squared() <= 0.000001:
 		return result
 	horizontal_forward = horizontal_forward.normalized()
+
 	var heading_degrees: float = fposmod(
 		rad_to_deg(atan2(horizontal_forward.dot(east), horizontal_forward.dot(north))),
 		360.0
@@ -195,7 +211,6 @@ static func calculate_heading_degrees(
 	result["north_world"] = north
 	result["east_world"] = east
 	return result
-
 
 static func calculate_attitude_angles(ship_basis: Basis, local_up_world: Vector3) -> Dictionary:
 	var up: Vector3 = local_up_world.normalized() if local_up_world.length_squared() > 0.000001 else Vector3.UP
@@ -210,6 +225,7 @@ static func calculate_attitude_angles(ship_basis: Basis, local_up_world: Vector3
 	if level_up.length_squared() > 0.000001:
 		level_up = level_up.normalized()
 		bank = rad_to_deg(atan2(-basis.x.dot(level_up), basis.y.dot(level_up)))
+
 	return {
 		"pitch_degrees": pitch,
 		"bank_degrees": bank,

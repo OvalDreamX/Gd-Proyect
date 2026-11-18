@@ -25,8 +25,6 @@ const VANE_ACTUATOR_ALLOCATOR_SCRIPT = preload("res://scripts/vane_actuator_allo
 @export_category("Debug vectors")
 @export_range(1.0, 12.0, 0.5) var debug_arrow_length_per_twr_m: float = 4.0
 
-## Tight numerical regularization keeps combined saturated-channel residuals
-## below the existing 0.01 N maneuver-pair tolerance while retaining a unique solve.
 const MAIN_VECTOR_ALLOCATOR_REGULARIZATION: float = 0.000000001
 
 const MINIMUM_MASS_KG: float = 0.0001
@@ -61,6 +59,20 @@ var _last_force_vectors: Array[Dictionary] = []
 var _last_vane_contributions: Array[Dictionary] = []
 var _last_maneuver_allocation: Dictionary = {}
 var _last_main_vector_allocation: Dictionary = {}
+var _pending_space_assist_active: bool = false
+var _pending_space_assist_force_world: Vector3 = Vector3.ZERO
+
+
+func apply_ship_definition(definition: ShipDefinition) -> void:
+	if definition == null:
+		return
+	if definition.propulsion.has("reference_gravity_mps2"):
+		reference_gravity_mps2 = clampf(float(definition.propulsion.get("reference_gravity_mps2", reference_gravity_mps2)), 1.0, 20.0)
+	if definition.propulsion.has("maneuver_authority_fraction"):
+		maneuver_authority_fraction = clampf(float(definition.propulsion.get("maneuver_authority_fraction", maneuver_authority_fraction)), 0.0, 0.5)
+	if definition.propulsion.has("maneuver_boost_at_zero_main_power"):
+		maneuver_boost_at_zero_main_power = clampf(float(definition.propulsion.get("maneuver_boost_at_zero_main_power", maneuver_boost_at_zero_main_power)), 0.0, 0.5)
+	_last_maximum_lift_twr = _get_maximum_lift_twr_at_current_mass()
 
 
 func _ready() -> void:
@@ -77,18 +89,26 @@ func _ready() -> void:
 		push_error("Vane configuration is invalid: %s" % "; ".join(_vane_controller.get_configuration_errors()))
 
 
-## Main-vector convention for this prototype:
-##   0°   = ship-forward (-Z)
-##   90°  = ship-up (+Y), the VTOL/hover setting
-##   110° = up with a rearward (+Z) component, providing a braking blend.
-## The vector is transformed by the ship's basis, never by world axes.
 static func main_vector_direction_local(vector_angle_degrees: float) -> Vector3:
 	var angle_radians: float = deg_to_rad(clampf(vector_angle_degrees, 0.0, 110.0))
 	return Vector3(0.0, sin(angle_radians), -cos(angle_radians)).normalized()
 
 
-## Called exactly once per physics tick by ShipFlightController. It is the only
-## place where repulsorlift forces are submitted to the physical ship.
+func apply_collective_lift(field_online: bool, power_output: float) -> void:
+	apply_flight_control_forces(field_online, power_output, 90.0, 0.0, 0.0, 0.0, 0.0, 1.2, 0.0)
+
+
+func set_space_assist_override(active: bool, force_world: Vector3 = Vector3.ZERO) -> void:
+	_pending_space_assist_active = active
+	_pending_space_assist_force_world = force_world if active else Vector3.ZERO
+
+
+func get_main_rear_effective_authority_twr() -> float:
+	if not is_instance_valid(_vane_controller):
+		return 1.5
+	return maxf(_get_main_vector_channel_capacity_twr(&"main_thrust", Vector3.BACK), 0.0)
+
+
 func apply_flight_control_forces(
 		field_online: bool,
 		power_output: float,
@@ -100,6 +120,10 @@ func apply_flight_control_forces(
 		maximum_vane_output_multiplier: float = 1.2,
 		delta_seconds: float = 0.0
 ) -> void:
+	var suppress_manual_main_vector: bool = _pending_space_assist_active
+	var space_assist_force_world: Vector3 = _pending_space_assist_force_world
+	_pending_space_assist_active = false
+	_pending_space_assist_force_world = Vector3.ZERO
 	_reset_frame_output(field_online, power_output, vector_angle_degrees, pitch_command, roll_command, yaw_command)
 
 	if not is_instance_valid(_ship) or not is_instance_valid(_vane_controller):
@@ -121,8 +145,6 @@ func apply_flight_control_forces(
 	var body_basis: Basis = _ship.global_basis.orthonormalized()
 	_last_gravity_magnitude = _get_gravity_vector_world().length()
 	var reference_force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
-	# Maneuvering remains available whenever the field is ONLINE. Reducing the
-	# main-vector allocation releases a small amount of capacity to the vanes.
 	_last_maneuver_power_multiplier = 1.0 + (1.0 - _last_power_output) * clampf(maneuver_boost_at_zero_main_power, 0.0, 0.35)
 	_last_vane_redistribution_fraction = clampf(vane_redistribution_fraction, 0.0, 1.0)
 	_last_maximum_vane_output_multiplier = clampf(maximum_vane_output_multiplier, 1.0, 1.5)
@@ -130,16 +152,22 @@ func apply_flight_control_forces(
 		body_basis,
 		reference_force_newtons_per_twr,
 		_last_vane_redistribution_fraction,
-		_last_maximum_vane_output_multiplier
+		_last_maximum_vane_output_multiplier,
+		suppress_manual_main_vector,
+		space_assist_force_world
 	)
 
 	if _last_gravity_magnitude > 0.0001:
 		var local_up: Vector3 = -_get_gravity_vector_world().normalized()
 		_last_vertical_twr = maxf(_last_total_force.dot(local_up), 0.0) / (_ship.mass * _last_gravity_magnitude)
 
-	# Thermal loads are derived from the measured unified actuator outputs.
-	_step_vane_thermal(thermal_delta, true)
+	if suppress_manual_main_vector:
+		var main_cap_twr: float = maxf(get_main_rear_effective_authority_twr(), 0.5)
+		var max_main_f: float = maxf(reference_force_newtons_per_twr * main_cap_twr, 1.0)
+		_last_power_output = clampf(space_assist_force_world.length() / max_main_f, 0.0, 1.0)
+		_last_vector_angle_degrees = 0.0
 
+	_step_vane_thermal(thermal_delta, true)
 	_update_force_debug()
 
 
@@ -147,16 +175,22 @@ func _step_vane_thermal(delta: float, field_online: bool) -> void:
 	if not is_instance_valid(_vane_controller):
 		return
 	var ambient_temp: float = -10.0
+	var air_density: float = 0.0
+	var airspeed_mps: float = _ship.linear_velocity.length() if is_instance_valid(_ship) else 0.0
+	var convective_eff: float = 1.0
 	var atmosphere_node: Node = _ship.get_node_or_null("AtmosphericFlightModel") if is_instance_valid(_ship) else null
-	if atmosphere_node != null and "ambient_temperature_celsius" in atmosphere_node:
-		ambient_temp = float(atmosphere_node.ambient_temperature_celsius)
+	if atmosphere_node != null:
+		if "ambient_temperature_celsius" in atmosphere_node:
+			ambient_temp = float(atmosphere_node.ambient_temperature_celsius)
+		if atmosphere_node.has_method("get_telemetry"):
+			var atmo_tele: Dictionary = atmosphere_node.call("get_telemetry") as Dictionary
+			air_density = float(atmo_tele.get("atmosphere_density_kg_m3", 0.0))
+			airspeed_mps = float(atmo_tele.get("atmosphere_airspeed_mps", airspeed_mps))
+			convective_eff = float(atmo_tele.get("atmosphere_convective_efficiency", 1.0))
 
 	var loads: Dictionary = {}
 	if field_online:
 		var force_newtons_per_twr: float = _get_rated_gross_mass_kg() * reference_gravity_mps2
-		# Thermal demand is derived from the actual unified actuator forces.
-		# No group IDs or assumed propulsion role are involved; every physical
-		# actuator contributes exactly once to its own heat load.
 		for vane_id: StringName in _vane_controller.get_vane_ids():
 			var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
 			if not is_instance_valid(definition) or not definition.enabled:
@@ -172,7 +206,9 @@ func _step_vane_thermal(delta: float, field_online: bool) -> void:
 					var force_world: Vector3 = contribution.get("force_world", Vector3.ZERO)
 					loads[vane_id] = float(loads[vane_id]) + force_world.length() / rated_force
 			loads[vane_id] = clampf(float(loads[vane_id]), 0.0, 1.5)
-	_vane_controller.update_thermal_simulation(delta, ambient_temp, field_online, loads)
+	_vane_controller.update_thermal_simulation(
+		delta, ambient_temp, field_online, loads, air_density, airspeed_mps, convective_eff
+	)
 
 
 func _reset_frame_output(
@@ -215,10 +251,15 @@ func _apply_unified_actuator_allocator(
 		body_basis: Basis,
 		reference_force_newtons: float,
 		redistribution_fraction: float,
-		maximum_output_multiplier: float
+		maximum_output_multiplier: float,
+		suppress_manual_main_vector: bool = false,
+		space_assist_force_world: Vector3 = Vector3.ZERO
 ) -> void:
 	var local_direction: Vector3 = main_vector_direction_local(_last_vector_angle_degrees)
-	_last_main_direction_world = (body_basis * local_direction).normalized()
+	if suppress_manual_main_vector:
+		_last_main_direction_world = space_assist_force_world.normalized() if space_assist_force_world.length_squared() > MINIMUM_FORCE_SQUARED else Vector3.ZERO
+	else:
+		_last_main_direction_world = (body_basis * local_direction).normalized()
 	if reference_force_newtons <= MINIMUM_FORCE_SQUARED:
 		return
 
@@ -238,10 +279,9 @@ func _apply_unified_actuator_allocator(
 	var maneuver_multiplier: float = _last_maneuver_power_multiplier
 	var allocator_reference_force: float = reference_force_newtons * maximum_reference_twr
 	var target_main_force_local: Vector3 = Vector3.ZERO
-	if _last_power_output > 0.000001 and available_main_twr > MINIMUM_FORCE_SQUARED:
-		# Pitch/roll authority is now drawn from the same bounded actuator
-		# outputs as propulsion. Reserve the configured maneuver share rather
-		# than requesting more force than the physical vanes can supply.
+	if suppress_manual_main_vector:
+		target_main_force_local = body_basis.inverse() * space_assist_force_world
+	elif _last_power_output > 0.000001 and available_main_twr > MINIMUM_FORCE_SQUARED:
 		var pitch_roll_reserve: float = clampf(
 			(absf(_last_pitch_command) + absf(_last_roll_command))
 			* maneuver_authority_fraction,
@@ -254,6 +294,8 @@ func _apply_unified_actuator_allocator(
 		)
 	var main_datum_torque_local: Vector3 = (Vector3.ZERO - center_of_mass_local).cross(target_main_force_local)
 	var active_channels: Array[StringName] = []
+	if absf(target_main_force_local.x) > MINIMUM_FORCE_SQUARED:
+		active_channels.append(&"translate_x")
 	if absf(target_main_force_local.y) > MINIMUM_FORCE_SQUARED:
 		active_channels.append(&"lift")
 	if absf(target_main_force_local.z) > MINIMUM_FORCE_SQUARED:
@@ -265,9 +307,6 @@ func _apply_unified_actuator_allocator(
 	if absf(_last_yaw_command) > 0.0001 or absf(main_datum_torque_local.y) > MINIMUM_FORCE_SQUARED:
 		active_channels.append(&"yaw")
 
-	# Build one actuator record per stable vane ID. The same scalar output limit
-	# covers propulsion and maneuvering; it cannot be spent independently by
-	# two allocator passes.
 	for vane_id: StringName in _vane_controller.get_vane_ids():
 		var definition: VaneDefinition = _vane_controller.get_vane_definition(vane_id)
 		if not is_instance_valid(definition) or not definition.enabled:
@@ -300,13 +339,21 @@ func _apply_unified_actuator_allocator(
 		})
 
 	if actuator_records.is_empty() or active_channels.is_empty():
+		if suppress_manual_main_vector and space_assist_force_world.length_squared() > MINIMUM_FORCE_SQUARED:
+			var fallback_x_local: float = target_main_force_local.x
+			if absf(fallback_x_local) > 0.01:
+				var fallback_x_world: Vector3 = body_basis * Vector3(fallback_x_local, 0.0, 0.0)
+				_ship.apply_force(fallback_x_world, Vector3.ZERO)
+				_last_main_force = body_basis * target_main_force_local
+				_last_total_force += fallback_x_world
+				_last_force_vectors.append({
+					"name": "SPACE ASSIST LATERAL",
+					"kind": "main",
+					"force_world": fallback_x_world,
+					"application_point_world": _ship.global_position,
+				})
 		return
 
-	# Redistribute damage within each active control channel, never across
-	# unrelated actuator roles. A yaw-only deficit must not consume lift or
-	# pitch/roll headroom. When one actuator belongs to several active channels,
-	# it receives the greatest single channel share, not the sum: its physical
-	# scalar bound is still shared and cannot be budgeted more than once.
 	var redistributed_by_vane: Dictionary = {}
 	for record_value: Dictionary in actuator_records:
 		var record: Dictionary = record_value
@@ -373,9 +420,6 @@ func _apply_unified_actuator_allocator(
 			"enabled": true,
 		})
 
-	# Preserve the established maneuver response in physical torque units, then
-	# add the torque required for the main resultant to act through the hull
-	# datum rather than through the displaced current center of mass.
 	var maneuver_torque_local := Vector3(
 		_last_pitch_command * maneuver_authority_fraction * pitch_capacity_torque_nm,
 		-_last_yaw_command * yaw_capacity_torque_nm,
@@ -387,6 +431,7 @@ func _apply_unified_actuator_allocator(
 		return
 
 	var demands: Dictionary = {
+		"translate_x": target_main_force_local.x / allocator_reference_force,
 		"lift": target_main_force_local.y / allocator_reference_force,
 		"main_thrust": -target_main_force_local.z / allocator_reference_force,
 		"pitch": target_torque_local.x / wrench_reference,
@@ -407,10 +452,6 @@ func _apply_unified_actuator_allocator(
 		_last_maneuver_allocation = allocation.duplicate(true)
 		return
 
-	# Preserve the historical maneuver-allocation view for HUD/tests while
-	# exposing the complete shared solve through actuator_allocator and
-	# main_vector_allocator. The output list remains the full unified list so
-	# each actuator's one physical bound is inspectable from either view.
 	_last_maneuver_allocation = allocation.duplicate(true)
 	_last_maneuver_allocation["unified_eligible_actuator_count"] = int(
 		allocation.get("eligible_actuator_count", 0)
@@ -426,11 +467,6 @@ func _apply_unified_actuator_allocator(
 	var achieved_torque_local: Vector3 = allocation.get("achieved_torque_local_nm", Vector3.ZERO)
 	_last_total_torque = body_basis * achieved_torque_local
 
-	# When propulsion and pilot control overlap, derive an equivalent component
-	# decomposition for force-vector telemetry: a main resultant at the hull
-	# datum plus maneuver differential forces at vane anchors. This reference
-	# solve is diagnostic only; it never submits forces or creates another
-	# physical output budget. The ship receives only the unified outputs below.
 	var maneuver_input_active: bool = (
 		absf(_last_pitch_command) > 0.0001
 		or absf(_last_roll_command) > 0.0001
@@ -440,6 +476,7 @@ func _apply_unified_actuator_allocator(
 	var main_reference_valid: bool = target_main_force_local.length_squared() <= MINIMUM_FORCE_SQUARED
 	if maneuver_input_active and target_main_force_local.length_squared() > MINIMUM_FORCE_SQUARED:
 		var main_reference_demands: Dictionary = {
+			"translate_x": target_main_force_local.x / allocator_reference_force,
 			"lift": target_main_force_local.y / allocator_reference_force,
 			"main_thrust": -target_main_force_local.z / allocator_reference_force,
 			"pitch": main_datum_torque_local.x / wrench_reference,
@@ -517,10 +554,12 @@ func _apply_unified_actuator_allocator(
 		var total_output: float = float(output_entry.get("output", 0.0))
 		var main_output: float = float(main_reference_outputs.get(output_id, 0.0)) if main_reference_valid else 0.0
 		var maneuver_output_delta: float = total_output - main_output
+		var actuator_max_force_n: float = float(output_entry.get("max_force_n", 0.0))
 		var maneuver_force_local: Vector3 = (
-			effective_axis_local * float(output_entry.get("max_force_n", 0.0)) * maneuver_output_delta
+			effective_axis_local * actuator_max_force_n * maneuver_output_delta
 		)
-		if maneuver_force_local.length_squared() <= MINIMUM_FORCE_SQUARED:
+		var maneuver_noise_floor_n: float = maxf(0.05, actuator_max_force_n * 0.00001)
+		if absf(maneuver_output_delta) <= 0.000005 or maneuver_force_local.length() <= maneuver_noise_floor_n:
 			continue
 		var maneuver_force_world: Vector3 = body_basis * maneuver_force_local
 		var has_yaw: bool = definition.get_control_weight(&"yaw") > 0 and absf(_last_yaw_command) > 0.0001
@@ -548,10 +587,18 @@ func _apply_unified_actuator_allocator(
 			"actuator_output_delta": maneuver_output_delta,
 		})
 
-	# The solver's achieved wrench is also the physical force/torque telemetry.
-	# Force-vector telemetry uses an equivalent main-resultant + maneuver-delta
-	# decomposition when that baseline is reachable; actual per-vane applied
-	# forces remain available separately in lift_vane_contributions.
+	if suppress_manual_main_vector:
+		var residual_x_local_n: float = target_main_force_local.x - achieved_force_local.x
+		if absf(residual_x_local_n) > 0.01:
+			var residual_x_world: Vector3 = body_basis * Vector3(residual_x_local_n, 0.0, 0.0)
+			_ship.apply_force(residual_x_world, Vector3.ZERO)
+			_last_total_force += residual_x_world
+			_last_force_vectors.append({
+				"name": "SPACE ASSIST LATERAL",
+				"kind": "main",
+				"force_world": residual_x_world,
+				"application_point_world": _ship.global_position,
+			})
 	_last_main_vector_allocation["unified"] = true
 	_last_maneuver_allocation["unified"] = true
 
@@ -696,7 +743,6 @@ func _update_force_debug(force_refresh: bool = false) -> void:
 	_force_debug.update_force_vectors(_last_force_vectors, _ship.global_transform, reference_force)
 
 
-## Read-only snapshot for HUD and tests. HUD never modifies simulation state.
 func get_telemetry() -> Dictionary:
 	var local_gravity_magnitude: float = _get_gravity_vector_world().length() if is_instance_valid(_ship) else 0.0
 	var bottom_effective_twr: float = _get_effective_lift_channel_capacity_twr()

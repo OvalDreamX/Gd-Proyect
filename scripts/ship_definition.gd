@@ -10,11 +10,13 @@ var display_name: String = ""
 var model_path: String = ""
 var manufacturer: String = ""
 var ship_class: String = ""
+var source_path: String = ""
 var physics: Dictionary = {}
 var cargo: Dictionary = {}
 var propulsion: Dictionary = {}
 var handling: Dictionary = {}
 var aerodynamics: Dictionary = {}
+var thermal_and_integrity: Dictionary = {}
 var ground_effect: Dictionary = {}
 var cameras: Dictionary = {}
 var vanes: Array[Dictionary] = []
@@ -33,6 +35,7 @@ func configure(source: Dictionary) -> void:
 	propulsion = source.get("propulsion", {}).duplicate(true)
 	handling = source.get("handling", {}).duplicate(true)
 	aerodynamics = source.get("aerodynamics", {}).duplicate(true)
+	thermal_and_integrity = source.get("thermal_and_integrity", {}).duplicate(true)
 	ground_effect = source.get("ground_effect", {}).duplicate(true)
 	cameras = source.get("cameras", {}).duplicate(true)
 	vanes.clear()

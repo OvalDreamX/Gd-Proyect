@@ -28,6 +28,7 @@ const DEFAULT_REGULARIZATION: float = 0.0001
 const CONVERGENCE_OUTPUT_DELTA: float = 0.00005
 const WRENCH_COMPONENT_COUNT: int = 6
 const LINEAR_SOLVE_EPSILON: float = 0.000000000001
+const OUTPUT_NOISE_DEADBAND: float = 0.000005
 
 
 static func allocate(
@@ -289,6 +290,8 @@ static func allocate(
 	var saturated_count: int = 0
 	for column_value: Dictionary in columns:
 		var output: float = float(column_value["output"])
+		if absf(output) < OUTPUT_NOISE_DEADBAND:
+			output = 0.0
 		var force_n: Vector3 = (
 			column_value["axis_local"] * float(column_value["max_force_n"]) * output
 		)

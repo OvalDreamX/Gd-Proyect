@@ -2,8 +2,8 @@ extends CanvasLayer
 class_name FlightHUD
 
 ## The cockpit flight display is intentionally separate from diagnostics.
-## All legacy force, vane, FCC and body telemetry is available only while F3
-## is active. This CanvasLayer never reads input or modifies simulation state.
+## All legacy force, vane, FCC, AtmosphereModel, and body telemetry is available
+## only while F3 is active. This CanvasLayer never reads input or modifies simulation state.
 
 const HUD_OVERLAY_SCRIPT = preload("res://scripts/flight_hud_overlay.gd")
 
@@ -34,8 +34,6 @@ var _cargo_y_label: Label
 var _cargo_z_slider: HSlider
 var _cargo_z_label: Label
 var _cargo_status_label: Label
-const DIAGNOSTICS_UPDATE_INTERVAL: float = 0.2 # 5 Hz update rate for heavy text
-var _diagnostics_time_remaining: float = 0.0
 
 
 func _ready() -> void:
@@ -44,6 +42,22 @@ func _ready() -> void:
 	_build_display_settings_overlay()
 	_build_cargo_manifest_overlay()
 	visible = false
+
+
+func _format_scientific(value: float) -> String:
+	if not is_finite(value):
+		return "0.000e+00"
+	if is_zero_approx(value):
+		return "0.000e+00"
+	var sign_prefix: String = "-" if value < 0.0 else ""
+	var mag: float = absf(value)
+	var exp_val: int = int(floor(log(mag) / log(10.0)))
+	var mantissa: float = mag / pow(10.0, float(exp_val))
+	if mantissa >= 9.9995:
+		mantissa *= 0.1
+		exp_val += 1
+	var exp_sign: String = "+" if exp_val >= 0 else "-"
+	return "%s%.3fe%s%02d" % [sign_prefix, mantissa, exp_sign, absi(exp_val)]
 
 
 func update_telemetry(telemetry: Dictionary) -> void:
@@ -57,11 +71,7 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	_debug_panel.visible = debug_enabled
 
 	if debug_enabled:
-		# Decrement by approx 0.033s (30Hz telemetry call rate)
-		_diagnostics_time_remaining -= 0.033
-		if _diagnostics_time_remaining <= 0.0:
-			_update_debug_text(telemetry)
-			_diagnostics_time_remaining = DIAGNOSTICS_UPDATE_INTERVAL
+		_update_debug_text(telemetry)
 
 
 func _build_hud() -> void:
@@ -104,9 +114,6 @@ func _build_hud() -> void:
 	var divider := HSeparator.new()
 	content.add_child(divider)
 
-	# TextEdit owns its own vertical scrollbar and has a concrete minimum
-	# viewport size. This avoids the nested Label/ScrollContainer sizing failure
-	# that could leave the F3 panel visible but apparently empty on some layouts.
 	_debug_text_label = TextEdit.new()
 	_debug_text_label.name = "DiagnosticsText"
 	_debug_text_label.editable = false
@@ -141,37 +148,37 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	var camera_yaw: float = float(telemetry.get("camera_yaw_degrees", 0.0))
 	var camera_pitch: float = float(telemetry.get("camera_pitch_degrees", 0.0))
 	var mass_kg: float = float(telemetry.get("ship_mass_kg", 0.0))
-	var position: Vector3 = telemetry.get("ship_position", Vector3.ZERO)
-	var velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO)
-	var local_up_world: Vector3 = telemetry.get("atmosphere_up_world", Vector3.UP)
+	var position: Vector3 = telemetry.get("ship_position", Vector3.ZERO) as Vector3
+	var velocity: Vector3 = telemetry.get("ship_linear_velocity", Vector3.ZERO) as Vector3
+	var local_up_world: Vector3 = telemetry.get("atmosphere_up_world", Vector3.UP) as Vector3
 	if local_up_world.length_squared() <= 0.000001:
 		local_up_world = Vector3.UP
 	else:
 		local_up_world = local_up_world.normalized()
 	var local_vertical_speed: float = velocity.dot(local_up_world)
 	var local_altitude: float = float(telemetry.get("atmosphere_altitude_m", position.y))
-	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO)
-	var basis: Basis = telemetry.get("ship_global_basis", Basis.IDENTITY)
-	basis = basis.orthonormalized()
+	var angular_velocity: Vector3 = telemetry.get("ship_angular_velocity", Vector3.ZERO) as Vector3
+	var raw_basis: Basis = telemetry.get("ship_global_basis", Basis.IDENTITY) as Basis
+	var basis: Basis = raw_basis.orthonormalized()
 	var pitch_attitude: float = rad_to_deg(asin(clampf(-basis.z.y, -1.0, 1.0)))
 	var roll_attitude: float = rad_to_deg(atan2(basis.x.y, basis.y.y))
 	var forward: Vector3 = -basis.z.normalized()
 	var heading: float = fposmod(rad_to_deg(atan2(-forward.x, -forward.z)), 360.0)
 	var gravity: float = float(telemetry.get("lift_gravity_magnitude", 0.0))
-	var net_force: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO)
+	var net_force: Vector3 = telemetry.get("lift_force_vector", Vector3.ZERO) as Vector3
 	var net_force_newtons: float = float(telemetry.get("lift_force_newtons", 0.0))
-	var net_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO)
-	var main_direction: Vector3 = telemetry.get("lift_main_direction_world", Vector3.ZERO)
+	var net_torque: Vector3 = telemetry.get("lift_torque_vector", Vector3.ZERO) as Vector3
+	var main_direction: Vector3 = telemetry.get("lift_main_direction_world", Vector3.ZERO) as Vector3
 	var actual_twr: float = float(telemetry.get("lift_actual_twr", 0.0))
 	var maximum_twr: float = float(telemetry.get("lift_maximum_twr", 0.0))
 	var hover_power: float = float(telemetry.get("lift_hover_power_percent", -1.0))
-	var vane_states: Array = telemetry.get("vane_states", [])
-	var vane_contributions: Array = telemetry.get("lift_vane_contributions", [])
-	var force_vectors: Array = telemetry.get("lift_force_vectors", [])
-	var fcc_desired: Vector3 = telemetry.get("fcc_desired_rate_local_rad_s", Vector3.ZERO)
-	var fcc_actual: Vector3 = telemetry.get("fcc_actual_rate_local_rad_s", Vector3.ZERO)
-	var fcc_error: Vector3 = telemetry.get("fcc_rate_error_local_rad_s", Vector3.ZERO)
-	var fcc_output: Vector3 = telemetry.get("fcc_control_output_by_axis", Vector3.ZERO)
+	var vane_states: Array = telemetry.get("vane_states", []) as Array
+	var vane_contributions: Array = telemetry.get("lift_vane_contributions", []) as Array
+	var force_vectors: Array = telemetry.get("lift_force_vectors", []) as Array
+	var fcc_desired: Vector3 = telemetry.get("fcc_desired_rate_local_rad_s", Vector3.ZERO) as Vector3
+	var fcc_actual: Vector3 = telemetry.get("fcc_actual_rate_local_rad_s", Vector3.ZERO) as Vector3
+	var fcc_error: Vector3 = telemetry.get("fcc_rate_error_local_rad_s", Vector3.ZERO) as Vector3
+	var fcc_output: Vector3 = telemetry.get("fcc_control_output_by_axis", Vector3.ZERO) as Vector3
 	var fcc_saturated_axes: PackedStringArray = PackedStringArray()
 	if bool(telemetry.get("fcc_pitch_saturated", false)):
 		fcc_saturated_axes.append("PITCH")
@@ -181,21 +188,31 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 		fcc_saturated_axes.append("YAW")
 	var saturation_text: String = ", ".join(fcc_saturated_axes) if not fcc_saturated_axes.is_empty() else "NONE"
 	var atmosphere_enabled: bool = bool(telemetry.get("atmosphere_enabled", false))
+	var atmosphere_preset_id: String = str(telemetry.get("atmosphere_preset_id", "DESERT_TATOOINE"))
+	var atmosphere_flow_regime: String = str(telemetry.get("atmosphere_flow_regime", "VACUUM"))
 	var atmosphere_altitude: float = float(telemetry.get("atmosphere_altitude_m", 0.0))
 	var atmosphere_density: float = float(telemetry.get("atmosphere_density_kg_m3", 0.0))
+	var atmosphere_pressure_pa: float = float(telemetry.get("atmosphere_pressure_pa", 0.0))
+	var atmosphere_kinetic_k: float = float(telemetry.get("atmosphere_gas_kinetic_temp_k", 289.15))
+	var atmosphere_viscosity: float = float(telemetry.get("atmosphere_dynamic_viscosity_pa_s", 0.0))
+	var atmosphere_sound_mps: float = float(telemetry.get("atmosphere_speed_of_sound_mps", 0.0))
+	var atmosphere_mach: float = float(telemetry.get("atmosphere_mach_number", 0.0))
+	var atmosphere_mfp_m: float = float(telemetry.get("atmosphere_mean_free_path_m", 1.0e9))
+	var atmosphere_knudsen: float = float(telemetry.get("atmosphere_knudsen_number", 1.0e9))
+	var atmosphere_rarefied_mult: float = float(telemetry.get("atmosphere_rarefied_drag_multiplier", 0.0))
 	var atmosphere_airspeed: float = float(telemetry.get("atmosphere_airspeed_mps", 0.0))
-	var atmosphere_wind: Vector3 = telemetry.get("atmosphere_velocity_world", Vector3.ZERO)
-	var atmosphere_mean_wind: Vector3 = telemetry.get("atmosphere_mean_wind_velocity_world", atmosphere_wind)
-	var atmosphere_turbulence: Vector3 = telemetry.get("atmosphere_turbulence_velocity_world", Vector3.ZERO)
-	var atmosphere_relative_velocity: Vector3 = telemetry.get("atmosphere_relative_velocity_world", Vector3.ZERO)
+	var atmosphere_wind: Vector3 = telemetry.get("atmosphere_velocity_world", Vector3.ZERO) as Vector3
+	var atmosphere_mean_wind: Vector3 = telemetry.get("atmosphere_mean_wind_velocity_world", atmosphere_wind) as Vector3
+	var atmosphere_turbulence: Vector3 = telemetry.get("atmosphere_turbulence_velocity_world", Vector3.ZERO) as Vector3
+	var atmosphere_relative_velocity: Vector3 = telemetry.get("atmosphere_relative_velocity_world", Vector3.ZERO) as Vector3
 	var atmosphere_projected_area: float = float(telemetry.get("atmosphere_projected_area_m2", 0.0))
 	var atmosphere_drag_coefficient: float = float(telemetry.get("atmosphere_drag_coefficient", 0.0))
-	var atmosphere_drag_force: Vector3 = telemetry.get("atmosphere_drag_force_world", Vector3.ZERO)
+	var atmosphere_drag_force: Vector3 = telemetry.get("atmosphere_drag_force_world", Vector3.ZERO) as Vector3
 	var atmosphere_drag_magnitude: float = float(telemetry.get("atmosphere_drag_force_n", 0.0))
 	var atmosphere_turbulence_enabled: bool = bool(telemetry.get("atmosphere_wind_turbulence_enabled", false))
 	var atmosphere_turbulence_amplitude: float = float(telemetry.get("atmosphere_wind_turbulence_amplitude_mps", 0.0))
 	var shield_lift_enabled: bool = bool(telemetry.get("shield_glide_lift_enabled", false))
-	var shield_lift_force: Vector3 = telemetry.get("shield_lift_force_world", Vector3.ZERO)
+	var shield_lift_force: Vector3 = telemetry.get("shield_lift_force_world", Vector3.ZERO) as Vector3
 	var shield_lift_magnitude: float = float(telemetry.get("shield_lift_force_n", 0.0))
 	var shield_lift_aoa: float = float(telemetry.get("shield_lift_angle_of_attack_degrees", 0.0))
 	var shield_lift_coefficient: float = float(telemetry.get("shield_lift_coefficient", 0.0))
@@ -217,20 +234,69 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Field state: %s | Main-vector throttle setpoint/output: %.1f%% / %.1f%% | Vector setpoint/output: %.1f° / %.1f°" % [field_state, power_command * 100.0, power_output * 100.0, vector_command, vector_actual])
 	lines.append("Pilot commands: pitch %.3f | roll %.3f | yaw %.3f | Controls armed: %s" % [pitch_command, roll_command, yaw_command, str(bool(telemetry.get("controls_armed", false)))])
 	lines.append("Camera: %s | Camera look yaw/pitch: %+.2f° / %+.2f° | Input mode: %s | Debug UI interaction: %s" % [camera_view, camera_yaw, camera_pitch, input_mode, str(bool(telemetry.get("debug_interaction_mode", false)))])
-	lines.append("FCC: %s | Control available: %s | Output P/R/Y: %+.3f / %+.3f / %+.3f" % ["ASSISTED RATE CONTROL" if bool(telemetry.get("fcc_assistance_enabled", true)) else "DIRECT VANES", str(bool(telemetry.get("fcc_control_available", false))), fcc_output.x, fcc_output.z, fcc_output.y])
+	lines.append("FCC: %s | Mode: %s | Control available: %s | Output P/R/Y: %+.3f / %+.3f / %+.3f" % ["ASSISTED" if bool(telemetry.get("fcc_assistance_enabled", true)) else "DIRECT VANES", str(telemetry.get("fcc_mode_label", "ATMO RATE ASSIST")), str(bool(telemetry.get("fcc_control_available", false))), fcc_output.x, fcc_output.z, fcc_output.y])
 	lines.append("Input shaping: deadzone %.1f%% | curve %.0f%% | conditioned P/R/Y: %+.3f / %+.3f / %+.3f" % [fcc_input_deadzone * 100.0, fcc_input_curvature * 100.0, fcc_pitch_conditioned, fcc_roll_conditioned, fcc_yaw_conditioned])
 	lines.append("Vane redistribution: %.0f%% of deficit | healthy-vane cap: %.2fx nominal" % [float(telemetry.get("fcc_vane_redistribution_fraction", 0.0)) * 100.0, float(telemetry.get("fcc_maximum_vane_output_multiplier", 1.0))])
+	if bool(telemetry.get("fcc_space_mode_active", false)):
+		lines.append("[ FCC SPACE MODE (PHASE 3J) ]")
+		lines.append("Active: %s | Engaged: %s | Brake: %s | Target speed: %.1f m/s | Actual: %.1f m/s" % [str(bool(telemetry.get("fcc_space_assist_active", false))), str(bool(telemetry.get("fcc_space_mode_engaged", false))), str(bool(telemetry.get("fcc_space_brake_active", false))), float(telemetry.get("fcc_space_target_speed_mps", 0.0)), float(telemetry.get("fcc_space_current_speed_mps", 0.0))])
+		lines.append("Forward component: %+.1f m/s | Lateral slip: %.2f m/s | Slip AOA: %.1f° (Target <= %.0f°)" % [float(telemetry.get("fcc_space_forward_speed_mps", 0.0)), float(telemetry.get("fcc_space_lateral_slip_mps", 0.0)), float(telemetry.get("fcc_space_slip_angle_deg", 0.0)), float(telemetry.get("fcc_space_aoa_limit_deg", 18.0))])
 	lines.append("")
 	var cargo_preset: String = str(telemetry.get("preset", "EMPTY"))
 	var cargo_mass: float = float(telemetry.get("cargo_mass_kg", 0.0))
-	var cargo_offset: Vector3 = telemetry.get("cargo_offset_m", Vector3.ZERO)
-	var com_offset: Vector3 = telemetry.get("center_of_mass_m", Vector3.ZERO)
+	var cargo_offset: Vector3 = telemetry.get("cargo_offset_m", Vector3.ZERO) as Vector3
+	var com_offset: Vector3 = telemetry.get("center_of_mass_m", Vector3.ZERO) as Vector3
 	var max_gross: float = float(telemetry.get("max_gross_kg", 55000.0))
 	var hover_est: float = float(telemetry.get("hover_throttle_estimate", 0.0)) * 100.0
 	lines.append("[ CARGO & MASS DISTRIBUTION (PHASE 2T) ]")
 	lines.append("Preset: %s | Payload: %.0f kg | Gross: %.0f / %.0f kg (%.1f%%)" % [cargo_preset, cargo_mass, mass_kg, max_gross, (mass_kg / maxf(max_gross, 1.0)) * 100.0])
 	lines.append("Cargo hold offset: (%.2f, %.2f, %.2f) m | Combined COM: (%.3f, %.3f, %.3f) m" % [cargo_offset.x, cargo_offset.y, cargo_offset.z, com_offset.x, com_offset.y, com_offset.z])
 	lines.append("Estimated 1g hover throttle: %.1f%% | Moment status: %s" % [hover_est, "FCC ACTIVE TRIM COMPENSATION" if com_offset.length_squared() > 0.001 else "SYMMETRICAL / BALANCED"])
+	lines.append("")
+	var env_id: String = str(telemetry.get("jump_environment_id", telemetry.get("instrument_environment_id", "test_range")))
+	var env_type: String = str(telemetry.get("jump_environment_type", telemetry.get("instrument_environment_type", "PLANET_SURFACE")))
+	var env_label: String = str(telemetry.get("jump_environment_label", env_id))
+	var jump_eligible: bool = bool(telemetry.get("jump_eligible", false))
+	var jump_code: String = str(telemetry.get("jump_reason_code", "UNAVAILABLE"))
+	var jump_reason: String = str(telemetry.get("jump_reason_text", "No jump telemetry available"))
+	var jump_min_alt: float = float(telemetry.get("jump_min_altitude_m", 0.0))
+	var jump_prog: float = float(telemetry.get("jump_altitude_progress", 0.0)) * 100.0
+	var jump_excl: float = float(telemetry.get("jump_exclusion_radius_m", 0.0))
+	var jump_radial: float = float(telemetry.get("jump_radial_distance_m", 0.0))
+	var jump_max_spd: float = float(telemetry.get("jump_max_speed_mps", 0.0))
+	var jump_contact: bool = bool(telemetry.get("jump_in_contact", false))
+	var max_spd_label: String = "UNLIMITED" if jump_max_spd <= 0.0 else "%.0f m/s" % jump_max_spd
+	lines.append("[ ENVIRONMENT & JUMP ENVELOPE (PHASE 3D) ]")
+	lines.append("Environment: %s (%s) | Type: %s | Ambient temp: %+.1f°C" % [env_label, env_id, env_type, float(telemetry.get("instrument_ambient_temperature_celsius", telemetry.get("atmosphere_temperature_celsius", -10.0)))])
+	lines.append("Jump status: %s | Code: %s | Reason: %s" % ["READY" if jump_eligible else "UNAVAILABLE", jump_code, jump_reason])
+	lines.append("Envelope altitude: %.0f / %.0f m (%.0f%%) | In contact: %s | Exclusion: %.0f / %.0f m | Max speed: %s" % [local_altitude, jump_min_alt, jump_prog, str(jump_contact), jump_radial, jump_excl, max_spd_label])
+	var station_name: String = str(telemetry.get("station_name", ""))
+	if not station_name.is_empty():
+		var station_face_dist: float = float(telemetry.get("station_face_distance_m", 0.0))
+		var in_dock: bool = bool(telemetry.get("station_in_docking_zone", false))
+		var dock_visits: int = int(telemetry.get("station_docking_visits", 0))
+		lines.append("Station target: %s | Face range: %.1f m | In docking zone: %s | Visits: %d" % [station_name, station_face_dist, str(in_dock), dock_visits])
+	var nav_target: String = str(telemetry.get("nav_target_name", ""))
+	if not nav_target.is_empty():
+		lines.append("[ SURFACE NAVIGATION (PHASE 3H) ]")
+		lines.append("Active waypoint (N): %s | Surface range: %.1f m (Direct: %.1f m) | Bearing: %03d° (Rel %+.1f°)" % [nav_target, float(telemetry.get("nav_surface_distance_m", 0.0)), float(telemetry.get("nav_direct_distance_m", 0.0)), int(round(float(telemetry.get("nav_target_bearing_deg", 0.0)))) % 360, float(telemetry.get("nav_relative_bearing_deg", 0.0))])
+	lines.append("")
+	var sim_clock_str: String = str(telemetry.get("sim_clock_formatted", "T+00:00:00"))
+	var celestial_clock_str: String = str(telemetry.get("celestial_clock_formatted", sim_clock_str))
+	var sim_jumps: int = int(telemetry.get("sim_clock_jumps", 0))
+	var route_name: String = str(telemetry.get("route_display_name", "NONE"))
+	var trans_state: String = str(telemetry.get("transition_state", "IDLE"))
+	var trans_err: String = str(telemetry.get("transition_last_error_message", ""))
+	lines.append("[ HYPERSPACE ROUTE & SIMULATION CLOCK (PHASE 3F) ]")
+	lines.append("Jump Clock: %s | Celestial Clock: %s | Committed jumps: %d | Transition state: %s" % [sim_clock_str, celestial_clock_str, sim_jumps, trans_state])
+	lines.append("Active fixed route: %s" % route_name)
+	if not trans_err.is_empty():
+		lines.append("Last transition error: %s" % trans_err)
+	if telemetry.has("star_id"):
+		lines.append("[ SOLAR SYSTEM & CELESTIAL MOTION (PHASE 3I/3J) ]")
+		lines.append("System: %s | Star: %s (Intensity %.2fx | Color %s)" % [str(telemetry.get("system_name", "Solara")), str(telemetry.get("star_name", "Sol Prime")), float(telemetry.get("sun_light_energy", telemetry.get("star_light_intensity", 1.0))), str(telemetry.get("star_light_color", Color.WHITE))])
+		lines.append("Planet: %s (%s, R=%.0f km) | Spin: %.1f° | Orbit: %.1f° | Station Orbit: %.1f°" % [str(telemetry.get("planet_name", "Tatooine")), str(telemetry.get("planet_type", "DESERT")), float(telemetry.get("planet_radius_m", 600000.0)) / 1000.0, float(telemetry.get("planet_rotation_angle_deg", 0.0)), float(telemetry.get("planet_orbital_angle_deg", 0.0)), float(telemetry.get("station_orbital_angle_deg", 0.0))])
+		lines.append("Surface Sun: Elev %+.2f° | Azimuth %03.0f°" % [float(telemetry.get("surface_solar_elevation_deg", 0.0)), float(telemetry.get("surface_solar_azimuth_deg", 0.0))])
 	lines.append("")
 	lines.append("[ FLIGHT STATE ]")
 	lines.append("Mass: %.1f kg | Position: (%.2f, %.2f, %.2f) m | Local altitude: %.2f m" % [mass_kg, position.x, position.y, position.z, local_altitude])
@@ -252,8 +318,11 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("Vertical TWR: %.3f / %.3f | Gravity: %.3f m/s² | Hover threshold: %s" % [actual_twr, maximum_twr, gravity, hover_threshold_text])
 	lines.append("Maneuver authority: %.4f | Power multiplier: %.2fx | Idle reserve: %.0f%% | Reference gravity: %.3f m/s²" % [float(telemetry.get("maneuver_authority_fraction", 0.0)), float(telemetry.get("maneuver_power_multiplier", 0.0)), float(telemetry.get("maneuver_boost_at_zero_main_power", 0.0)) * 100.0, float(telemetry.get("reference_gravity_mps2", 9.81))])
 	lines.append("")
+	var rad_conv_eff: float = float(telemetry.get("radiator_convective_efficiency", telemetry.get("atmosphere_convective_efficiency", 0.0)))
 	lines.append("[ ATMOSPHERE / DRAG ]")
-	lines.append("Atmosphere enabled: %s | Local altitude above reference: %.2f m | Density: %.6f kg/m³" % [str(atmosphere_enabled), atmosphere_altitude, atmosphere_density])
+	lines.append("Preset: %s | Enabled: %s | Flow regime: %s | Altitude: %.2f m | Density: %.6f kg/m³" % [atmosphere_preset_id, str(atmosphere_enabled), atmosphere_flow_regime, atmosphere_altitude, atmosphere_density])
+	lines.append("Pressure: %.1f Pa | Kinetic Temp: %.1f K | Viscosity: %s Pa·s | Speed of Sound: %.1f m/s (M %.2f)" % [atmosphere_pressure_pa, atmosphere_kinetic_k, _format_scientific(atmosphere_viscosity), atmosphere_sound_mps, atmosphere_mach])
+	lines.append("Mean Free Path: %s m | Knudsen: %.4f | Rarefied Cd Mult: %.2fx | Rad Conv Eff: %.1f%%" % [_format_scientific(atmosphere_mfp_m), atmosphere_knudsen, atmosphere_rarefied_mult, rad_conv_eff * 100.0])
 	lines.append("Airspeed: %.3f m/s | Relative air velocity: %s m/s" % [atmosphere_airspeed, str(atmosphere_relative_velocity)])
 	lines.append("Mean wind: %s m/s | Turbulence: %s m/s | Current wind: %s m/s" % [str(atmosphere_mean_wind), str(atmosphere_turbulence), str(atmosphere_wind)])
 	lines.append("Turbulence: %s | Configured amplitude: %.2f m/s" % [str(atmosphere_turbulence_enabled), atmosphere_turbulence_amplitude])
@@ -269,7 +338,7 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	lines.append("[ VANE CONFIGURATION / CONDITION ]")
 	lines.append("Configuration valid: %s | Vane count: %d | Healthy count: %d" % [str(bool(telemetry.get("vane_configuration_valid", false))), int(telemetry.get("vane_count", 0)), int(telemetry.get("vane_healthy_count", 0))])
 	for vane_value in vane_states:
-		var vane: Dictionary = vane_value
+		var vane: Dictionary = vane_value as Dictionary
 		lines.append("%s | group=%s | enabled=%s | integrity=%.3f | failed=%s | nominal=%.3f TWR | effective=%.3f TWR | local pos=%s" % [str(vane.get("vane_id", "UNKNOWN")), str(vane.get("group_id", "UNKNOWN")), str(vane.get("enabled", true)), float(vane.get("integrity", 0.0)), str(vane.get("failed", false)), float(vane.get("nominal_authority_twr", 0.0)), float(vane.get("effective_authority_twr", 0.0)), str(vane.get("local_position", Vector3.ZERO))])
 	lines.append("")
 	lines.append("[ VANE THERMAL & GREEN ZONE (PHASE 2S) ]")
@@ -278,8 +347,15 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	var max_cont: float = float(telemetry.get("thermal_max_continuous_temp_c", 180.0))
 	var crit_t: float = float(telemetry.get("thermal_critical_temp_c", 230.0))
 	lines.append("Ambient: %+.1f°C | Nominal warmup threshold: %.1f°C | Max continuous: %.1f°C | Critical: %.1f°C" % [amb_t, nom_warm, max_cont, crit_t])
+	var tier_name: String = str(telemetry.get("vane_integrity_tier", "HEALTHY"))
+	var low_int: float = float(telemetry.get("vane_lowest_integrity", 1.0)) * 100.0
+	var avg_int: float = float(telemetry.get("vane_average_integrity", 1.0)) * 100.0
+	var conv_x: float = float(telemetry.get("radiator_convective_factor", 1.0))
+	var cool_s: float = float(telemetry.get("radiator_effective_cooling_per_s", 0.05))
+	var start_rel: float = float(telemetry.get("vane_startup_reliability", 1.0)) * 100.0
+	lines.append("Integrity Tier: %s (Min %.1f%% / Avg %.1f%%) | Radiator: x%.2f (%.3f/s, ConvEff %.0f%%) | Start Reliability: %.0f%%" % [tier_name, low_int, avg_int, conv_x, cool_s, rad_conv_eff * 100.0, start_rel])
 	for vane_value in vane_states:
-		var vane: Dictionary = vane_value
+		var vane: Dictionary = vane_value as Dictionary
 		var v_id: String = str(vane.get("vane_id", "UNKNOWN"))
 		var temp_c: float = float(vane.get("temperature_celsius", -10.0))
 		var status: String = str(vane.get("thermal_status", "COLD_STRAIN"))
@@ -295,17 +371,17 @@ func _update_debug_text(telemetry: Dictionary) -> void:
 	if vane_contributions.is_empty():
 		lines.append("No individual vane forces submitted on the current physics tick.")
 	for contribution_value in vane_contributions:
-		var contribution: Dictionary = contribution_value
-		var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO)
-		var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO)
+		var contribution: Dictionary = contribution_value as Dictionary
+		var vane_force: Vector3 = contribution.get("force_world", Vector3.ZERO) as Vector3
+		var vane_torque: Vector3 = contribution.get("torque_world", Vector3.ZERO) as Vector3
 		lines.append("%s | F=(%.1f, %.1f, %.1f) N | M=(%.2f, %.2f, %.2f) N·m | base=%.3f TWR | redistributed=%.3f TWR | point=%s" % [str(contribution.get("vane_id", "UNKNOWN")), vane_force.x, vane_force.y, vane_force.z, vane_torque.x, vane_torque.y, vane_torque.z, float(contribution.get("base_effective_authority_twr", contribution.get("effective_authority_twr", 0.0))), float(contribution.get("redistributed_authority_twr", 0.0)), str(contribution.get("application_point_world", Vector3.ZERO))])
 	lines.append("")
 	lines.append("[ APPLIED RESULTANT VECTORS ]")
 	if force_vectors.is_empty():
 		lines.append("No force vectors submitted on the current physics tick.")
 	for force_value in force_vectors:
-		var force_entry: Dictionary = force_value
-		var applied_force: Vector3 = force_entry.get("force_world", Vector3.ZERO)
+		var force_entry: Dictionary = force_value as Dictionary
+		var applied_force: Vector3 = force_entry.get("force_world", Vector3.ZERO) as Vector3
 		lines.append("%s | kind=%s | magnitude=%.1f N | force=%s | application point=%s" % [str(force_entry.get("name", "FORCE")), str(force_entry.get("kind", "unknown")), applied_force.length(), str(applied_force), str(force_entry.get("application_point_world", Vector3.ZERO))])
 
 	var previous_scroll: float = _debug_text_label.scroll_vertical
@@ -455,7 +531,7 @@ func _populate_display_settings() -> void:
 	var current_scale: float = 1.0
 	if manager != null:
 		current_mode = str(manager.call("get_display_mode"))
-		current_resolution = manager.call("get_windowed_resolution")
+		current_resolution = manager.call("get_windowed_resolution") as Vector2i
 		current_scale = float(manager.call("get_hud_scale"))
 
 	var selected_mode_id: int = 0
@@ -469,14 +545,14 @@ func _populate_display_settings() -> void:
 	_resolution_option.clear()
 	var resolution_values: Array = []
 	if manager != null:
-		resolution_values = manager.call("get_windowed_resolution_options")
+		resolution_values = manager.call("get_windowed_resolution_options") as Array
 	else:
 		resolution_values = [Vector2i(960, 540), Vector2i(1280, 720), Vector2i(1600, 900), Vector2i(1920, 1080)]
 	var selected_resolution_index: int = 0
 	for value: Variant in resolution_values:
 		if not value is Vector2i:
 			continue
-		var resolution: Vector2i = value
+		var resolution: Vector2i = value as Vector2i
 		var item_index: int = _resolution_option.get_item_count()
 		_resolution_option.add_item("%d × %d" % [resolution.x, resolution.y])
 		_resolution_option.set_item_metadata(item_index, resolution)
@@ -502,7 +578,7 @@ func _update_display_settings_hint() -> void:
 	var manager: Node = get_node_or_null("/root/DisplaySettings")
 	var desktop_resolution := Vector2i(1280, 720)
 	if manager != null:
-		desktop_resolution = manager.call("get_desktop_resolution")
+		desktop_resolution = manager.call("get_desktop_resolution") as Vector2i
 	var desktop_text: String = "%d × %d" % [desktop_resolution.x, desktop_resolution.y]
 	if windowed:
 		_settings_hint.text = "Windowed mode uses the selected size. The window can also be resized with its borders."
@@ -522,11 +598,11 @@ func _apply_display_settings_from_ui() -> void:
 			mode = "borderless_fullscreen"
 		2:
 			mode = "exclusive_fullscreen"
-	var resolution: Vector2i = manager.call("get_windowed_resolution")
+	var resolution: Vector2i = manager.call("get_windowed_resolution") as Vector2i
 	if _resolution_option.get_item_count() > 0:
 		var selected_metadata: Variant = _resolution_option.get_item_metadata(_resolution_option.get_selected())
 		if selected_metadata is Vector2i:
-			resolution = selected_metadata
+			resolution = selected_metadata as Vector2i
 	var selected_hud_scale: float = float(_hud_scale_option.get_selected_id()) / 100.0
 	manager.call("apply_display_settings", mode, resolution, selected_hud_scale)
 	close_display_settings()
@@ -595,9 +671,9 @@ func _on_cargo_preset_clicked(preset_name: String) -> void:
 func _sync_cargo_ui_from_system() -> void:
 	if _cargo_system == null or _cargo_mass_slider == null:
 		return
-	var t: Dictionary = _cargo_system.call("get_telemetry")
+	var t: Dictionary = _cargo_system.call("get_telemetry") as Dictionary
 	_cargo_mass_slider.set_value_no_signal(float(t.get("cargo_mass_kg", 0.0)))
-	var offset: Vector3 = t.get("cargo_offset_m", Vector3.ZERO)
+	var offset: Vector3 = t.get("cargo_offset_m", Vector3.ZERO) as Vector3
 	_cargo_x_slider.set_value_no_signal(offset.x)
 	_cargo_y_slider.set_value_no_signal(offset.y)
 	_cargo_z_slider.set_value_no_signal(offset.z)
@@ -613,13 +689,13 @@ func _update_cargo_labels() -> void:
 	_cargo_z_label.text = "%+.2f m" % _cargo_z_slider.value
 
 	if _cargo_system != null:
-		var t: Dictionary = _cargo_system.call("get_telemetry")
+		var t: Dictionary = _cargo_system.call("get_telemetry") as Dictionary
 		var total_kg: float = float(t.get("total_mass_kg", 30000.0))
 		var max_kg: float = float(t.get("max_gross_kg", 55000.0))
-		var com: Vector3 = t.get("center_of_mass_m", Vector3.ZERO)
+		var com: Vector3 = t.get("center_of_mass_m", Vector3.ZERO) as Vector3
 		var hover: float = float(t.get("hover_throttle_estimate", 0.5)) * 100.0
 		var preset: String = str(t.get("preset", "CUSTOM"))
-		
+
 		var trim_note: String = "[ BALANCED LOAD ] Even distribution across 4 bottom lift vanes."
 		if absf(com.x) > 0.05 or absf(com.z) > 0.05:
 			var moment_est: float = (total_kg * 9.81 * com.length()) / 1000.0
@@ -750,7 +826,6 @@ func _build_cargo_manifest_overlay() -> void:
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.add_child(grid)
 
-	# Row: Cargo Mass
 	var l_mass := Label.new()
 	l_mass.text = "PAYLOAD MASS:"
 	l_mass.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -769,7 +844,6 @@ func _build_cargo_manifest_overlay() -> void:
 	_cargo_mass_label.custom_minimum_size.x = 80.0
 	grid.add_child(_cargo_mass_label)
 
-	# Row: X Offset
 	var l_x := Label.new()
 	l_x.text = "PORT / STBD (X):"
 	l_x.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -788,7 +862,6 @@ func _build_cargo_manifest_overlay() -> void:
 	_cargo_x_label.custom_minimum_size.x = 80.0
 	grid.add_child(_cargo_x_label)
 
-	# Row: Y Offset
 	var l_y := Label.new()
 	l_y.text = "DECK LEVEL (Y):"
 	l_y.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -807,7 +880,6 @@ func _build_cargo_manifest_overlay() -> void:
 	_cargo_y_label.custom_minimum_size.x = 80.0
 	grid.add_child(_cargo_y_label)
 
-	# Row: Z Offset
 	var l_z := Label.new()
 	l_z.text = "FORE / AFT (Z):"
 	l_z.vertical_alignment = VERTICAL_ALIGNMENT_CENTER

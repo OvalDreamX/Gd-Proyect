@@ -2,7 +2,7 @@ extends Control
 class_name FlightHUDOverlay
 
 ## Screen-space flight display. Central symbology is cockpit-alignment gated; side instruments persist in external view.
-## it reads telemetry snapshots and never changes ship input or physics.
+## Reads telemetry snapshots (including FCC Space Mode status and radiator convective efficiency) and never modifies ship input or physics.
 
 const COLOR_PRIMARY := Color(0.50, 1.00, 0.78, 0.92)
 const COLOR_SECONDARY := Color(0.29, 0.69, 0.56, 0.76)
@@ -13,7 +13,6 @@ const COLOR_FLIGHT_PATH := Color(0.48, 0.88, 1.00, 0.96)
 const HUD_CONTENT_SCALE: float = 0.90
 const FLIGHT_PATH_MIN_SPEED_MPS: float = 2.0
 const FLIGHT_PATH_BOUNDS: Rect2 = Rect2(250.0, 140.0, 780.0, 352.0)
-# Calibrated perspective projection for the existing 1280x720 HUD layout.
 const BASE_WIDTH: float = 1280.0
 const BASE_HEIGHT: float = 720.0
 const WINDSHIELD_REFERENCE_DISTANCE_M: float = 0.91
@@ -31,8 +30,12 @@ func update_telemetry(telemetry: Dictionary) -> void:
 	queue_redraw()
 
 
-## Projects inertial velocity into the active camera perspective, as the F-16 FPM does.
-## Out-of-field vectors are moved to the HUD edge and flagged for the X cue.
+static func format_radiator_status_label(conv_factor: float, ambient_temp_c: float) -> String:
+	if conv_factor > 1.02:
+		return "RAD AIR x%.1f (%+.0fC)" % [conv_factor, ambient_temp_c]
+	return "RAD VAC (%+.0fC)" % ambient_temp_c
+
+
 static func calculate_flight_path_marker(
 		velocity_world: Vector3,
 		view_basis: Basis,
@@ -41,8 +44,6 @@ static func calculate_flight_path_marker(
 		bounds: Rect2 = FLIGHT_PATH_BOUNDS,
 		minimum_speed_mps: float = FLIGHT_PATH_MIN_SPEED_MPS
 ) -> Dictionary:
-	# F-16-style FPM: project the inertial velocity direction through the same
-	# perspective as the active camera. It is independent of the ship's nose axis.
 	var result: Dictionary = {
 		"visible": false,
 		"position": hud_center,
@@ -60,18 +61,12 @@ static func calculate_flight_path_marker(
 	var lateral_angle: float = atan2(local_velocity.x, forward_speed)
 	var vertical_reference_speed: float = sqrt(local_velocity.x * local_velocity.x + forward_speed * forward_speed)
 	var vertical_angle: float = atan2(local_velocity.y, vertical_reference_speed)
-	# Vectors in front of the camera use perspective projection. Vectors behind
-	# it cannot be projected onto the combiner and are represented by an edge cue.
 	var raw_position: Vector2
 	if forward_speed > 0.0001:
-		# In front of the combiner: use true pinhole perspective projection.
 		var projected_x: float = focal_pixels * local_velocity.x / forward_speed
 		var projected_y: float = focal_pixels * local_velocity.y / forward_speed
 		raw_position = hud_center + Vector2(projected_x, -projected_y)
 	else:
-		# A vector behind the camera has no finite forward projection. Keep its
-		# edge cue on the side indicated by its camera-plane components. Exactly
-		# aft has no unique 2-D bearing, so use the bottom edge as a clear cue.
 		var rear_direction := Vector2(local_velocity.x, -local_velocity.y)
 		if rear_direction.length_squared() <= 0.000001:
 			rear_direction = Vector2.DOWN
@@ -87,9 +82,6 @@ static func calculate_flight_path_marker(
 	)
 	var marker_position: Vector2 = raw_position
 	if clipped:
-		# Intersect the boresight-to-vector ray with the HUD rectangle. Clamping
-		# X and Y independently would drag diagonal cues into a corner and lose
-		# the actual direction of travel.
 		var ray: Vector2 = raw_position - hud_center
 		var scale_x: float = 1.0e20
 		var scale_y: float = 1.0e20
@@ -128,13 +120,12 @@ func _draw() -> void:
 	draw_set_transform(draw_offset, 0.0, Vector2.ONE * scale_factor)
 
 	var font: Font = ThemeDB.fallback_font
-	# Flight instruments consume the sensor snapshot only. Raw rigid-body and
-	# flight-model values remain available to diagnostics, not to the renderer.
-	var view_basis: Basis = _telemetry.get("view_camera_global_basis", Basis.IDENTITY).orthonormalized()
+	var raw_basis: Basis = _telemetry.get("view_camera_global_basis", Basis.IDENTITY) as Basis
+	var view_basis: Basis = raw_basis.orthonormalized()
 	var local_altitude: float = float(_telemetry.get("instrument_altitude_m", 0.0))
 	var local_vertical_speed: float = float(_telemetry.get("instrument_vertical_speed_mps", 0.0))
-	var flight_path_velocity: Vector3 = _telemetry.get("instrument_inertial_velocity_world", Vector3.ZERO)
-	var indicated_velocity: Vector3 = _telemetry.get("instrument_air_relative_velocity_world", flight_path_velocity)
+	var flight_path_velocity: Vector3 = _telemetry.get("instrument_inertial_velocity_world", Vector3.ZERO) as Vector3
+	var indicated_velocity: Vector3 = _telemetry.get("instrument_air_relative_velocity_world", flight_path_velocity) as Vector3
 	var indicated_speed_mps: float = float(_telemetry.get("instrument_speed_mps", indicated_velocity.length()))
 	var speed_label: String = str(_telemetry.get("instrument_speed_label", "SPEED"))
 	var pitch_degrees: float = float(_telemetry.get("instrument_pitch_degrees", 0.0))
@@ -151,15 +142,26 @@ func _draw() -> void:
 	var yaw_input: float = float(_telemetry.get("yaw_command", 0.0))
 	var field_state: String = str(_telemetry.get("field_state", "OFF"))
 	var assistance_enabled: bool = bool(_telemetry.get("fcc_assistance_enabled", true))
+	var space_mode: bool = bool(_telemetry.get("fcc_space_mode_active", false))
 
 	var left_gauge_x: float = 88.0 - extra_space.x * 0.5
 	var right_gauge_x: float = 1178.0 + extra_space.x * 0.5
-	_draw_side_gauge(
-		font, left_gauge_x, "MAIN VECTOR", "OUTPUT",
-		float(_telemetry.get("field_power_output", 0.0)),
-		float(_telemetry.get("field_power_command", 0.0)),
-		1.0, "%"
-	)
+	if space_mode and assistance_enabled:
+		var max_spd: float = maxf(float(_telemetry.get("fcc_space_max_speed_mps", 120.0)), 1.0)
+		var tgt_spd: float = float(_telemetry.get("fcc_space_target_speed_mps", 0.0))
+		_draw_side_gauge(
+			font, left_gauge_x, "SPACE SPD", "SETPOINT",
+			indicated_speed_mps,
+			tgt_spd,
+			max_spd, " m/s"
+		)
+	else:
+		_draw_side_gauge(
+			font, left_gauge_x, "MAIN VECTOR", "OUTPUT",
+			float(_telemetry.get("field_power_output", 0.0)),
+			float(_telemetry.get("field_power_command", 0.0)),
+			1.0, "%"
+		)
 	_draw_side_gauge(
 		font, right_gauge_x, "VECTOR ANGLE", "ACTUATOR",
 		float(_telemetry.get("vector_distribution_actual_degrees", 90.0)),
@@ -181,10 +183,9 @@ func _draw() -> void:
 		if velocity_valid:
 			_draw_flight_path_marker(flight_path_velocity, view_basis, camera_focal_pixels)
 
-	# These instruments are screen-fixed and remain visible in external view.
 	_draw_input_indicators(font, pitch_input, roll_input, yaw_input)
+	_draw_environment_and_jump_status(font)
 	_draw_bottom_guidance(font)
-
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
@@ -227,6 +228,8 @@ func _draw_side_gauge(
 		draw_line(Vector2(center_x + 7.0, tick_y), Vector2(center_x + 13.0, tick_y), COLOR_DIM, 0.7)
 		if gauge_name == "MAIN VECTOR":
 			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(tick_index * 25), 9, COLOR_DIM)
+		elif gauge_name == "SPACE SPD":
+			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(int(round(maximum_value * tick_fraction))), 9, COLOR_DIM)
 		else:
 			_draw_text(font, Vector2(center_x + 20.0, tick_y + 4.0), str(tick_index * 110 / 4), 9, COLOR_DIM)
 
@@ -238,8 +241,6 @@ func _draw_side_gauge(
 		)
 		draw_line(Vector2(center_x - 7.0, actual_y), Vector2(center_x + 7.0, actual_y), COLOR_PRIMARY, 1.2)
 
-	# The pilot command is an independent amber tick. The filled output bar
-	# follows the actuator value and therefore visibly lags the command.
 	draw_line(Vector2(center_x - 15.0, command_y), Vector2(center_x + 16.0, command_y), COLOR_COMMAND, 1.2)
 	draw_line(Vector2(center_x - 15.0, command_y - 3.0), Vector2(center_x - 15.0, command_y + 3.0), COLOR_COMMAND, 1.0)
 	var command_label: String = "SET %s%s" % [String.num(command_value, 1), unit]
@@ -257,15 +258,34 @@ func _draw_top_status(font: Font, field_state: String, assistance_enabled: bool)
 	elif field_state == "STARTING":
 		state_color = COLOR_COMMAND
 	_draw_text(font, Vector2(440.0, 82.0), "REPULSORLIFT  //  %s" % field_state, 12, state_color, HORIZONTAL_ALIGNMENT_CENTER, 400.0)
+
+	var space_mode: bool = bool(_telemetry.get("fcc_space_mode_active", false))
+	var fcc_label: String = "FCC ASSIST  %s" % ("ON" if assistance_enabled else "OFF / DIRECT")
+	var fcc_color: Color = COLOR_PRIMARY if assistance_enabled else COLOR_COMMAND
+	if space_mode:
+		var mode_tag: String = str(_telemetry.get("fcc_mode_label", "SPACE STANDBY"))
+		fcc_label = "FCC // %s" % mode_tag
+		if bool(_telemetry.get("fcc_space_brake_active", false)):
+			fcc_color = COLOR_WARNING
+		elif not assistance_enabled:
+			fcc_color = COLOR_COMMAND
+
 	_draw_text(
 		font,
-		Vector2(520.0, 105.0),
-		"FCC ASSIST  %s" % ("ON" if assistance_enabled else "OFF / DIRECT"),
+		Vector2(490.0, 105.0),
+		fcc_label,
 		10,
-		COLOR_PRIMARY if assistance_enabled else COLOR_COMMAND,
+		fcc_color,
 		HORIZONTAL_ALIGNMENT_CENTER,
-		240.0
+		300.0
 	)
+	var integ_tier: String = str(_telemetry.get("vane_integrity_tier", "HEALTHY"))
+	var lowest_pct: float = float(_telemetry.get("vane_lowest_integrity", 1.0)) * 100.0
+	var conv_factor: float = float(_telemetry.get("radiator_convective_factor", 1.0))
+	var amb_t_c: float = float(_telemetry.get("atmosphere_temperature_celsius", -10.0))
+	var rad_label: String = format_radiator_status_label(conv_factor, amb_t_c)
+	var tier_color: Color = COLOR_PRIMARY if integ_tier == "HEALTHY" else (COLOR_COMMAND if integ_tier.begins_with("WORN") else COLOR_WARNING)
+	_draw_text(font, Vector2(440.0, 119.0), "VANE %3.0f%% (%s)  //  %s" % [lowest_pct, integ_tier, rad_label], 9, tier_color, HORIZONTAL_ALIGNMENT_CENTER, 400.0)
 	_draw_corner_frame()
 
 
@@ -276,7 +296,6 @@ func _draw_corner_frame() -> void:
 		Vector2(238.0, 506.0), Vector2(1042.0, 506.0),
 	]
 	var arm: float = 18.0
-	# Short frame segments leave the center visually open.
 	draw_line(corners[0], corners[0] + Vector2(arm, 0), frame_color, 0.7)
 	draw_line(corners[0], corners[0] + Vector2(0, arm), frame_color, 0.7)
 	draw_line(corners[1], corners[1] - Vector2(arm, 0), frame_color, 0.7)
@@ -288,8 +307,6 @@ func _draw_corner_frame() -> void:
 
 
 static func calculate_letterbox_offset(control_size: Vector2, scale_factor: float) -> Vector2:
-	# CanvasItem draw transforms apply scale after translation. Convert the
-	# logical letterbox margin back to viewport pixels before setting origin.
 	var safe_scale: float = maxf(scale_factor, 0.001)
 	var logical_size: Vector2 = control_size / safe_scale
 	var logical_margin: Vector2 = (logical_size - Vector2(BASE_WIDTH, BASE_HEIGHT)) * 0.5
@@ -297,7 +314,6 @@ static func calculate_letterbox_offset(control_size: Vector2, scale_factor: floa
 
 
 static func heading_label_degrees(heading_degrees: float, offset_degrees: float = 0.0) -> int:
-	# Normalize after rounding as well: 359.6° must display as 000°, not 360°.
 	return int(round(fposmod(heading_degrees + offset_degrees, 360.0))) % 360
 
 
@@ -333,6 +349,7 @@ func _draw_heading_tape(font: Font, heading_degrees: float, focal_pixels: float)
 	draw_line(Vector2(center_x, y - 6.0), Vector2(center_x, y + 17.0), COLOR_PRIMARY, 1.3)
 	draw_line(Vector2(center_x - 5.0, y - 6.0), Vector2(center_x + 5.0, y - 6.0), COLOR_PRIMARY, 1.1)
 	_draw_text(font, Vector2(center_x - 42.0, 176.0), "%03d°" % heading_label_degrees(heading_degrees), 12, COLOR_PRIMARY, HORIZONTAL_ALIGNMENT_CENTER, 84.0)
+
 
 func _draw_flight_data(
 		font: Font,
@@ -371,8 +388,6 @@ static func calculate_pitch_mark_offset_pixels(
 
 
 func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float, focal_pixels: float) -> void:
-	# The sensor suite supplies attitude; this function only projects its values
-	# into the HUD's perspective geometry.
 	var center := Vector2(640.0, 360.0)
 	var ladder_rotation: float = deg_to_rad(-roll_degrees)
 	for mark in range(-40, 41, 5):
@@ -396,7 +411,6 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float
 			_draw_text(font, left_label, label_text, 10, COLOR_SECONDARY)
 			_draw_text(font, right_label, label_text, 10, COLOR_SECONDARY)
 
-	# Fixed bank scale and moving bank pointer.
 	var bank_center := Vector2(640.0, 230.0)
 	var bank_radius: float = 52.0
 	for angle_degrees in range(-60, 61, 10):
@@ -409,7 +423,6 @@ func _draw_attitude_ladder(font: Font, pitch_degrees: float, roll_degrees: float
 	var pointer_direction := Vector2(cos(pointer_angle), sin(pointer_angle))
 	draw_line(bank_center + pointer_direction * (bank_radius - 19.0), bank_center + pointer_direction * (bank_radius + 1.0), COLOR_PRIMARY, 1.5)
 
-	# Fixed aircraft reference / boresight.
 	draw_line(Vector2(573.0, center.y), Vector2(619.0, center.y), COLOR_PRIMARY, 1.6)
 	draw_line(Vector2(661.0, center.y), Vector2(707.0, center.y), COLOR_PRIMARY, 1.6)
 	draw_line(Vector2(619.0, center.y), Vector2(630.0, center.y + 7.0), COLOR_PRIMARY, 1.3)
@@ -428,6 +441,7 @@ func _draw_broken_line(start_point: Vector2, end_point: Vector2, color: Color, w
 		draw_line(start_point + direction * cursor, start_point + direction * segment_end, color, width)
 		cursor = segment_end + gap_length
 
+
 func _draw_flight_path_marker(velocity_world: Vector3, view_basis: Basis, focal_pixels: float) -> void:
 	var center := Vector2(640.0, 360.0)
 	var marker: Dictionary = calculate_flight_path_marker(
@@ -436,11 +450,9 @@ func _draw_flight_path_marker(velocity_world: Vector3, view_basis: Basis, focal_
 	if not bool(marker.get("visible", false)):
 		return
 
-	var point: Vector2 = marker.get("position", center)
-	# The normal FPM is a circle with short lateral wings and a top tail.
+	var point: Vector2 = marker.get("position", center) as Vector2
 	draw_arc(point, 3.0, 0.0, TAU, 20, COLOR_FLIGHT_PATH, 1.0)
 	if bool(marker.get("clipped", false)):
-		# F-16 out-of-field cue: retain the same circle size and superimpose an X.
 		draw_line(point + Vector2(-3.0, -3.0), point + Vector2(3.0, 3.0), COLOR_FLIGHT_PATH, 1.0)
 		draw_line(point + Vector2(-3.0, 3.0), point + Vector2(3.0, -3.0), COLOR_FLIGHT_PATH, 1.0)
 		return
@@ -465,7 +477,6 @@ func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, y
 	draw_circle(stick_position, 8.0, COLOR_SECONDARY, false, 0.7)
 	_draw_text(font, Vector2(516.0, 684.0), "PITCH / ROLL", 10, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 136.0)
 
-	# Rudder command is a laterally moving, thick vertical marker.
 	var rudder_axis_center_x: float = 730.0
 	draw_line(Vector2(rudder_axis_center_x - 38.0, 608.0), Vector2(rudder_axis_center_x + 38.0, 608.0), COLOR_DIM, 0.7)
 	var rudder_x: float = rudder_axis_center_x + clampf(yaw_input, -1.0, 1.0) * 36.0
@@ -476,12 +487,12 @@ func _draw_input_indicators(font: Font, pitch_input: float, roll_input: float, y
 func _draw_bottom_guidance(font: Font) -> void:
 	_draw_text(
 		font,
-		Vector2(350.0, 711.0),
-		"F FIELD   W/S THROTTLE   Q/E VECTOR   MOUSE P/R   A/D RUDDER   V FCC   C VIEW   RMB LOOK   F3 DEBUG   F10 DISPLAY",
+		Vector2(280.0, 711.0),
+		"F FIELD   W/S THROTTLE   Q/E VECTOR   B BRAKE   J JUMP   N NAV   MOUSE P/R   A/D RUDDER   V FCC   C VIEW   F3 DEBUG   F10 DISPLAY",
 		9,
 		COLOR_DIM,
 		HORIZONTAL_ALIGNMENT_CENTER,
-		580.0
+		720.0
 	)
 
 
@@ -506,3 +517,46 @@ func _draw_text(
 	if font == null:
 		return
 	draw_string(font, position, text, alignment, width, font_size, color)
+
+
+func _draw_environment_and_jump_status(font: Font) -> void:
+	var env_label: String = str(_telemetry.get("jump_environment_label", _telemetry.get("instrument_environment_id", "")))
+	var env_type: String = str(_telemetry.get("instrument_environment_type", _telemetry.get("jump_environment_type", "")))
+	if not env_label.is_empty():
+		var env_header: String = "ENV  //  %s (%s)" % [env_label.to_upper(), env_type] if not env_type.is_empty() else "ENV  //  %s" % env_label.to_upper()
+		_draw_text(font, Vector2(360.0, 56.0), env_header, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 560.0)
+	var station_name: String = str(_telemetry.get("station_name", ""))
+	if not station_name.is_empty():
+		var face_dist_m: float = float(_telemetry.get("station_face_distance_m", 0.0))
+		var in_dock: bool = bool(_telemetry.get("station_in_docking_zone", false))
+		var dock_label: String = "DOCKING ZONE REACHED" if in_dock else "APPROACH (+Z FACE)"
+		var station_line: String = "%s  //  RANGE %.0f m  //  %s" % [station_name.to_upper(), face_dist_m, dock_label]
+		_draw_text(font, Vector2(320.0, 69.0), station_line, 9, COLOR_PRIMARY if in_dock else COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 640.0)
+	else:
+		var nav_target: String = str(_telemetry.get("nav_target_name", ""))
+		if not nav_target.is_empty():
+			var surf_dist_m: float = float(_telemetry.get("nav_surface_distance_m", 0.0))
+			var brg_deg: int = int(round(float(_telemetry.get("nav_target_bearing_deg", 0.0)))) % 360
+			var dist_label: String = "%.1f km" % (surf_dist_m / 1000.0) if surf_dist_m >= 1000.0 else "%.0f m" % surf_dist_m
+			var nav_line: String = "NAV [N]  //  %s  //  BRG %03d°  //  DIST %s" % [nav_target, brg_deg, dist_label]
+			_draw_text(font, Vector2(320.0, 69.0), nav_line, 9, COLOR_SECONDARY, HORIZONTAL_ALIGNMENT_CENTER, 640.0)
+
+	if not _telemetry.has("jump_reason_text"):
+		return
+
+	var jump_eligible: bool = bool(_telemetry.get("jump_eligible", false))
+	var reason_code: String = str(_telemetry.get("jump_reason_code", ""))
+	var reason_text: String = "JUMP READY — PRESS J TO JUMP" if jump_eligible else str(_telemetry.get("jump_reason_text", ""))
+	var status_color: Color = COLOR_PRIMARY if jump_eligible else (COLOR_DIM if reason_code == "ENV_DISALLOWED" else COLOR_COMMAND)
+	var misfire_msg: String = str(_telemetry.get("startup_misfire_message", ""))
+	if not misfire_msg.is_empty():
+		_draw_text(font, Vector2(320.0, 514.0), misfire_msg, 10, COLOR_WARNING, HORIZONTAL_ALIGNMENT_CENTER, 640.0)
+	_draw_text(font, Vector2(320.0, 534.0), reason_text, 10, status_color, HORIZONTAL_ALIGNMENT_CENTER, 640.0)
+
+	var min_alt_m: float = float(_telemetry.get("jump_min_altitude_m", 0.0))
+	if min_alt_m > 0.001 and reason_code != "ENV_DISALLOWED":
+		var progress: float = clampf(float(_telemetry.get("jump_altitude_progress", 0.0)), 0.0, 1.0)
+		var bar_rect := Rect2(520.0, 540.0, 240.0, 3.0)
+		draw_rect(bar_rect, COLOR_DIM, false, 0.8)
+		if progress > 0.001:
+			draw_rect(Rect2(bar_rect.position.x, bar_rect.position.y, bar_rect.size.x * progress, bar_rect.size.y), status_color, true)

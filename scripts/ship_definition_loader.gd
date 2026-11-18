@@ -33,6 +33,7 @@ static func parse_text(json_text: String, source_name: String = "<memory>") -> D
 	if not errors.is_empty():
 		return _failure(errors)
 	var definition := ShipDefinition.new()
+	definition.source_path = source_name
 	definition.configure(data)
 	return {"valid": true, "definition": definition, "errors": PackedStringArray()}
 
@@ -61,7 +62,7 @@ static func validate(data: Dictionary) -> PackedStringArray:
 	if model_path.is_empty() or model_path.begins_with("/") or model_path.contains("..") or model_path.contains("\\") or not model_path.to_lower().ends_with(".glb"):
 		errors.append("model must be a relative .glb path inside the ship mod folder.")
 
-	for optional_section: String in ["identity", "handling", "aerodynamics", "ground_effect", "cameras"]:
+	for optional_section: String in ["identity", "handling", "aerodynamics", "thermal_and_integrity", "ground_effect", "cameras"]:
 		if data.has(optional_section) and not (data[optional_section] is Dictionary):
 			errors.append("%s must be an object when provided." % optional_section)
 
@@ -124,7 +125,21 @@ static func validate(data: Dictionary) -> PackedStringArray:
 
 	if data.has("ground_effect"):
 		_validate_ground_effect(data["ground_effect"], errors)
+	if data.has("thermal_and_integrity"):
+		_validate_thermal_and_integrity(data["thermal_and_integrity"], errors)
 	return errors
+
+static func _validate_thermal_and_integrity(value: Variant, errors: PackedStringArray) -> void:
+	if not (value is Dictionary):
+		errors.append("thermal_and_integrity must be an object when provided.")
+		return
+	var block: Dictionary = value
+	for num_key: String in ["nominal_warmup_temp_c", "max_continuous_temp_c", "critical_temp_c", "base_online_heat_rate", "heat_rate_coefficient", "load_exponent"]:
+		if block.has(num_key):
+			_validate_positive_number(block, num_key, "thermal_and_integrity", errors, false)
+	for sub_key: String in ["radiator", "wear", "integrity_tiers"]:
+		if block.has(sub_key) and not (block[sub_key] is Dictionary):
+			errors.append("thermal_and_integrity.%s must be an object." % sub_key)
 
 
 static func _validate_ground_effect(value: Variant, errors: PackedStringArray) -> void:
